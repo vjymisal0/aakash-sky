@@ -1023,6 +1023,26 @@ body[data-tab='tonight'] .view-tonight {
   color: var(--accent);
 }
 
+.hover-tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: rgba(13, 14, 16, 0.94);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.hover-tip .dot {
+  margin-right: 0;
+}
+
 /* ---------- boot + toast ---------- */
 
 .boot {

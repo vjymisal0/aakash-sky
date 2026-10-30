@@ -106,6 +106,8 @@ export interface GlobeEvents {
   onSelect(sat: Sat | null): void;
   /** Fired when the user drags the globe while it was following a satellite. */
   onFollowEnd(): void;
+  /** Mouse hover over a satellite (desktop only); null when the pointer leaves it. */
+  onHover(sat: Sat | null, clientX: number, clientY: number): void;
 }
 
 export class Globe {
@@ -128,6 +130,9 @@ export class Globe {
   private selected: Sat | null = null;
   private raycaster = new THREE.Raycaster();
   private flyTo: { from: THREE.Vector3; to: THREE.Vector3; t0: number } | null = null;
+  /** Latest mouse position waiting to be hit-tested on the next frame. */
+  private hoverAt: { x: number; y: number } | null = null;
+  private hovered: Sat | null = null;
   /** Satellites propagated per animation frame; the full fleet refreshes every few frames. */
   private budget = 2500;
 
@@ -381,6 +386,14 @@ export class Globe {
       if (k >= 1) this.flyTo = null;
     }
 
+    if (this.hoverAt) {
+      const { x, y } = this.hoverAt;
+      this.hoverAt = null;
+      const sat = this.pick(x, y);
+      if (sat || this.hovered) this.events.onHover(sat, x, y);
+      this.hovered = sat;
+    }
+
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -415,8 +428,18 @@ export class Globe {
       }
     });
     el.addEventListener('pointerup', (e) => {
-      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
-      this.events.onSelect(this.pick(e.clientX, e.clientY));
+      const click = down && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 6;
+      down = null;
+      if (click) this.events.onSelect(this.pick(e.clientX, e.clientY));
+    });
+    // Hover labels only for a mouse that is not dragging; touch has no hover.
+    el.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'mouse' && e.buttons === 0) this.hoverAt = { x: e.clientX, y: e.clientY };
+    });
+    el.addEventListener('pointerleave', () => {
+      this.hoverAt = null;
+      if (this.hovered) this.events.onHover(null, 0, 0);
+      this.hovered = null;
     });
   }
 

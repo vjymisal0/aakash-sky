@@ -186,6 +186,7 @@ function renderShell() {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
           <span>${esc(t('nearMe'))}</span>
         </button>
+        <div class="hover-tip" id="tip" hidden></div>
         <article class="info card" id="info" hidden></article>
         <footer class="attrib">
           <span>${esc(t('dataFrom'))} <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a> · ${esc(t('updated'))} <span id="updated" class="mono">—</span></span>
@@ -610,6 +611,17 @@ setTab(state.tab);
 const globe = new Globe($('#globe'), {
   onSelect: (s) => select(s),
   onFollowEnd: () => setFollowing(false),
+  onHover: (sat, x, y) => {
+    const tip = $('#tip');
+    tip.hidden = !sat;
+    $('#globe canvas').style.cursor = sat ? 'pointer' : '';
+    if (!sat) return;
+    const r = $('.stage').getBoundingClientRect();
+    tip.style.transform = `translate(${x - r.left + 14}px, ${y - r.top + 14}px)`;
+    tip.innerHTML = `<i class="dot" style="background:${CATEGORY_COLORS[sat.category]}"></i><b class="mono">${esc(sat.name)}</b><span class="dim">${esc(
+      tCategory(sat.category),
+    )}</span>`;
+  },
 });
 
 function setPlace(p: Place) {
@@ -765,6 +777,8 @@ setInterval(renderPasses, 60_000);
 renderCities();
 renderPasses();
 globe.setObserver(state.place.lat, state.place.lon);
+// Dev-only handle for profiling from the browser console.
+if (import.meta.env.DEV) Object.assign(window, { __globe: globe });
 
 async function load() {
   const res = await fetch(`${import.meta.env.BASE_URL}data/catalog.json`);
