@@ -22,7 +22,8 @@ Success means a first-time visitor reaches their next visible pass in under 10 s
 | Language | English only | Hindi was built and then removed at the owner's request. All copy stays in `src/i18n.ts`. |
 | Location privacy | Geolocation rounded to 0.01° and stored only in `localStorage` | Pass times do not need more precision. Nothing leaves the device. |
 | Look | Near-black, single saffron accent, Space Grotesk for prose, JetBrains Mono for data, Doto for headline numbers | Instrument-like and calm. Every pixel on screen is real data. |
-| Over India | Live list of satellites whose ground point is inside a coarse India outline | Answers "what is above us right now" the way a flight tracker lists aircraft in the airspace. |
+| Over India | Map and list show only satellites whose ground point is inside India's outline (Natural Earth, India point of view) | Answers "what is above us right now" the way a flight tracker lists aircraft in the airspace. The official outline matters for an Indian public app. |
+| Clutter | Unnamed objects (launch designator only) hidden by default | Real but meaningless to a casual viewer. |
 
 ## Out of scope for v1
 

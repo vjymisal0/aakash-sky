@@ -1,36 +1,37 @@
-// "Over India" test for satellite ground points. The outline is a coarse hand-drawn
-// polygon (about 25-50 km accuracy) that follows India's official boundary, plus boxes
-// for the Andaman & Nicobar and Lakshadweep islands. It is for grouping, not mapping,
-// and is never drawn on screen.
+// "Over India" test for satellite ground points, using India's outline as India officially
+// draws it (Natural Earth 1:10m, India point of view, simplified to ~2 km by
+// scripts/build-india.mjs). The same outline frames the map.
 import { degreesLat, degreesLong, eciToGeodetic, gstime, type SatRec } from 'satellite.js';
+import outline from '../data/india.json';
 import { satEci } from './sky';
 
-type Ring = Array<[lon: number, lat: number]>;
+type Ring = number[][];
 
-const MAINLAND: Ring = [
-  [68.2, 23.7], [68.8, 24.3], [70.0, 24.3], [71.1, 24.4], [70.6, 25.7], [70.1, 26.6],
-  [69.5, 27.0], [70.4, 28.0], [71.9, 27.9], [73.0, 29.2], [73.9, 30.0], [74.5, 30.9],
-  [74.6, 31.9], [75.3, 32.3], [74.0, 32.9], [73.5, 33.6], [73.7, 34.6], [72.6, 35.6],
-  [73.6, 36.4], [74.8, 37.1], [76.0, 36.9], [77.8, 35.6], [80.2, 35.6], [80.3, 35.0],
-  [79.5, 34.3], [78.9, 33.0], [79.5, 32.5], [78.8, 31.6], [79.0, 31.1], [80.2, 30.6],
-  [80.9, 30.2], [80.1, 29.7], [80.1, 28.8], [81.2, 28.3], [83.3, 27.4], [84.6, 27.3],
-  [85.9, 26.6], [87.0, 26.4], [88.1, 26.4], [88.0, 27.1], [88.1, 27.9], [88.8, 28.0],
-  [88.9, 27.3], [89.8, 26.7], [91.6, 26.8], [92.1, 26.9], [91.6, 27.8], [92.5, 27.9],
-  [93.3, 28.6], [94.5, 29.2], [95.4, 29.0], [96.2, 29.4], [97.4, 28.3], [96.6, 27.3],
-  [95.2, 26.6], [94.6, 25.5], [94.2, 24.0], [93.4, 23.0], [93.2, 22.2], [92.6, 21.9],
-  [92.3, 23.2], [92.0, 24.2], [91.2, 23.6], [91.6, 25.0], [90.0, 25.2], [89.8, 26.0],
-  [88.6, 26.2], [88.1, 25.4], [88.6, 24.3], [88.9, 22.6], [89.0, 21.6], [87.0, 21.5],
-  [86.0, 20.0], [85.0, 19.3], [84.0, 18.2], [82.3, 16.6], [81.0, 15.7], [80.2, 15.0],
-  [80.45, 13.3], [80.0, 11.5], [80.0, 10.3], [79.4, 9.2], [78.3, 8.7], [77.55, 7.9],
-  [76.4, 8.9], [76.0, 10.5], [75.6, 11.8], [74.8, 12.8], [74.4, 14.5], [73.6, 16.0],
-  [73.0, 18.0], [72.7, 19.0], [72.7, 20.5], [72.6, 21.4], [72.5, 22.2], [72.1, 21.3],
-  [71.0, 20.7], [70.0, 21.0], [69.0, 22.3], [69.4, 22.8], [68.5, 23.0],
-];
+export const INDIA_OUTLINE = outline as GeoJSON.Feature<GeoJSON.MultiPolygon>;
 
-const ISLANDS: Array<[minLon: number, minLat: number, maxLon: number, maxLat: number]> = [
-  [92.2, 6.7, 93.95, 13.7], // Andaman & Nicobar
-  [71.7, 8.0, 74.0, 12.4], // Lakshadweep
-];
+// Outer rings only (Natural Earth India has no holes), each with its own bounding box.
+const POLYGONS = INDIA_OUTLINE.geometry.coordinates.map((poly) => {
+  const ring = poly[0] as Ring;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { ring, minX, minY, maxX, maxY };
+});
+
+/** Bounding box of all of India, islands included. */
+export const INDIA_BOUNDS = {
+  west: Math.min(...POLYGONS.map((p) => p.minX)),
+  south: Math.min(...POLYGONS.map((p) => p.minY)),
+  east: Math.max(...POLYGONS.map((p) => p.maxX)),
+  north: Math.max(...POLYGONS.map((p) => p.maxY)),
+};
 
 function inRing(lon: number, lat: number, ring: Ring): boolean {
   let inside = false;
@@ -44,9 +45,9 @@ function inRing(lon: number, lat: number, ring: Ring): boolean {
 
 export function isOverIndia(lat: number, lon: number): boolean {
   // Cheap bounding box first: almost every satellite is far away.
-  if (lat < 6.5 || lat > 37.2 || lon < 68 || lon > 97.5) return false;
-  if (ISLANDS.some(([a, b, c, d]) => lon >= a && lon <= c && lat >= b && lat <= d)) return true;
-  return inRing(lon, lat, MAINLAND);
+  const b = INDIA_BOUNDS;
+  if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return false;
+  return POLYGONS.some((p) => lon >= p.minX && lon <= p.maxX && lat >= p.minY && lat <= p.maxY && inRing(lon, lat, p.ring));
 }
 
 export function subPoint(satrec: SatRec, date: Date) {

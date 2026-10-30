@@ -4,7 +4,7 @@ A live satellite tracker for the Indian public. Every icon on the map is a real 
 
 - **Over India now.** A live list of every satellite whose ground point is over India this moment, typically about 100 at once. Each card shows altitude, heading, speed, whether it is sunlit, and how long until it leaves India. Tap a card to fly to it, then **Track live** to keep the camera on it.
 - **Spot it tonight.** Pick your city (or use your location) and get the next naked-eye passes for the next 7 days: when it appears, where to look, how high it climbs and when it fades. One tap adds a pass to your phone's calendar with a 10-minute reminder.
-- **A map centred on India.** A dark map with English place labels, opening on India. Satellites are drawn as icons pointing in their direction of travel and coloured by layer: India (ISRO and Indian-owned), space stations, navigation, weather, Starlink, OneWeb, other. Indian satellites and space stations are larger and labelled. Starlink and OneWeb (about 70% of the fleet) start hidden so they do not bury everything else. **3D** switches to a globe, and **IN** flies back to India. Tap any satellite for its owner, launch date, orbit, live altitude and speed, and whether it is in sunlight. Links like `#sat=25544` open straight to one satellite, so they can be shared.
+- **A map of India's sky only.** A dark map with English place labels, fitted to India. Only satellites whose ground point is over India are drawn, and the rest of the world is dimmed. India's outline follows its official boundary. Satellites are drawn as icons pointing in their direction of travel and coloured by layer: India (ISRO and Indian-owned), space stations, navigation, weather, Starlink, OneWeb, other. Indian satellites and space stations are larger and labelled. Starlink, OneWeb (about 70% of the fleet) and unnamed objects known only by launch designator (such as `2024-205F`) start hidden, so the map stays readable; chips bring them back. **3D** switches to a globe, and **IN** flies back to India. Tap any satellite for its owner, launch date, orbit, live altitude and speed, and whether it is in sunlight. Links like `#sat=25544` open straight to one satellite, so they can be shared.
 - **India first.** Indian satellites are their own layer, with mission types (NavIC navigation, Cartosat imaging, INSAT weather, and so on). There are 33 preset Indian cities, including Sriharikota.
 - **Free, no login, no backend.** It is a static site. Orbital data is downloaded at build time and the orbit maths runs on your device.
 
@@ -30,7 +30,7 @@ npm run build   # production build in dist/
 | Pass worker | `src/passes.worker.ts` | Predicts 7 days for all CelesTrak "visual" satellites off the main thread, streaming partial results so the hero card fills in first. |
 | Map | `src/skymap.ts` | MapLibre GL with the free OpenFreeMap dark style (no API key). Propagates about 2,500 satellites per animation frame and pushes only those in view to a GeoJSON source once a second. Shows the selected satellite's ground track, and dims satellites in Earth's shadow. |
 | UI | `src/main.ts`, `src/style.css`, `src/i18n.ts` | No framework. All copy lives in `i18n.ts`. Mobile layout uses a bottom sheet. |
-| Over India | `src/core/india.ts` | Coarse outline of India's official boundary plus island boxes, used only for grouping (never drawn). Crossing entry and exit are found by walking the ground track in 20 s steps. |
+| Over India | `src/core/india.ts`, `src/data/india.json` | India's outline from Natural Earth 1:10m, India point of view, simplified to about 2 km by `scripts/build-india.mjs` (26 KB). Used both to pick which satellites are drawn and to frame the map. Crossing entry and exit are found by walking the ground track in 20 s steps. |
 | Calendar | `src/core/ics.ts` | RFC 5545 export with a display alarm and UTF-8-safe line folding. |
 | Offline | `public/sw.js` | App shell cache-first, orbital data network-first. |
 
@@ -43,6 +43,7 @@ The app does not compute brightness magnitudes. The ISS and Tiangong are labelle
 ## Data and credits
 
 - Orbital elements and the satellite catalogue come from [CelesTrak](https://celestrak.org), maintained by Dr T.S. Kelso.
+- India's boundary comes from [Natural Earth](https://www.naturalearthdata.com) (public domain), India point-of-view edition.
 - Map tiles and style come from [OpenFreeMap](https://openfreemap.org), using © OpenMapTiles and © OpenStreetMap contributors data, rendered with [MapLibre GL JS](https://maplibre.org).
 - Fonts are Space Grotesk, JetBrains Mono and Doto (SIL OFL), self-hosted through Fontsource.
 - The interface patterns (live list, one-line status, single primary action, mobile tab bar) were inspired by [vimana.live](https://vimana.live).

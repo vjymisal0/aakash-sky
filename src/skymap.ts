@@ -8,6 +8,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { degreesLat, degreesLong, eciToEcf, eciToGeodetic, gstime, jday, shadowFraction, sunPos } from 'satellite.js';
 import type { Category, Sat } from './core/catalog';
 import { periodMinutes } from './core/catalog';
+import { INDIA_BOUNDS, INDIA_OUTLINE, isOverIndia } from './core/india';
 import { satEci } from './core/sky';
 
 export const CATEGORY_COLORS: Record<Category, string> = {
@@ -23,8 +24,15 @@ export const CATEGORY_COLORS: Record<Category, string> = {
 setWorkerUrl(workerUrl);
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
-const INDIA_VIEW = { center: [80.5, 22.5] as [number, number], zoom: 3.9 };
-const MOBILE_SHEET_PADDING = 0.28;
+const INDIA_BOX: [[number, number], [number, number]] = [
+  [INDIA_BOUNDS.west, INDIA_BOUNDS.south],
+  [INDIA_BOUNDS.east, INDIA_BOUNDS.north],
+];
+/** Room for the top bar, layer chips and (on phones) the floating tab bar. */
+const fitPadding = () =>
+  matchMedia('(max-width: 820px)').matches
+    ? { top: 100, bottom: 110, left: 12, right: 12 }
+    : { top: 70, bottom: 80, left: 40, right: 40 };
 const EMPHASIS = ['match', ['get', 'cat'], 'station', 1.6, 'india', 1.4, 1] as unknown as ExpressionSpecification;
 /** Labels are reserved for the few satellites people look for by name. */
 const LABELLED: Category[] = ['station', 'india'];
@@ -60,12 +68,11 @@ export class SkyMap {
 
   constructor(host: HTMLElement, events: MapEvents) {
     this.events = events;
-    const mobile = matchMedia('(max-width: 820px)').matches;
     this.map = new MapLibreMap({
       container: host,
       style: STYLE_URL,
-      center: INDIA_VIEW.center,
-      zoom: mobile ? INDIA_VIEW.zoom - 0.7 : INDIA_VIEW.zoom,
+      bounds: INDIA_BOX,
+      fitBoundsOptions: { padding: fitPadding() },
       minZoom: 1.2,
       maxZoom: 9,
       attributionControl: { compact: true },
@@ -73,7 +80,6 @@ export class SkyMap {
       pitchWithRotate: false,
     });
     this.map.touchZoomRotate.disableRotation();
-    if (mobile) this.map.setPadding({ top: 90, bottom: innerHeight * MOBILE_SHEET_PADDING, left: 0, right: 0 });
 
     this.map.on('load', () => this.setupLayers());
     this.map.on('dragstart', () => {
@@ -100,6 +106,34 @@ export class SkyMap {
     }
     map.addImage('sat', satelliteIcon(), { sdf: true, pixelRatio: 2 });
     const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+    // Only India's sky is shown, so fade the rest of the world and outline India in saffron.
+    const holes = INDIA_OUTLINE.geometry.coordinates.map((poly) => poly[0]);
+    map.addSource('outside-india', {
+      type: 'geojson',
+      data: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [-180, -85],
+            [180, -85],
+            [180, 85],
+            [-180, 85],
+            [-180, -85],
+          ],
+          ...holes,
+        ],
+      },
+    });
+    map.addSource('india', { type: 'geojson', data: INDIA_OUTLINE });
+    map.addLayer({ id: 'outside-india', type: 'fill', source: 'outside-india', paint: { 'fill-color': '#050607', 'fill-opacity': 0.62 } });
+    map.addLayer({ id: 'india-fill', type: 'fill', source: 'india', paint: { 'fill-color': '#ffb13b', 'fill-opacity': 0.025 } });
+    map.addLayer({
+      id: 'india-border',
+      type: 'line',
+      source: 'india',
+      paint: { 'line-color': '#ffb13b', 'line-opacity': 0.55, 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 7, 1.6] },
+    });
     for (const id of ['sats', 'track', 'selected', 'me']) map.addSource(id, { type: 'geojson', data: empty });
 
     const color = ['match', ['get', 'cat'], ...Object.entries(CATEGORY_COLORS).flat(), '#9aa0a6'] as unknown as ExpressionSpecification;
@@ -262,7 +296,7 @@ export class SkyMap {
   /** Back to the default view of India. */
   home() {
     this.following = null;
-    this.map.flyTo({ ...INDIA_VIEW, zoom: matchMedia('(max-width: 820px)').matches ? INDIA_VIEW.zoom - 0.7 : INDIA_VIEW.zoom, speed: 1.4 });
+    this.map.fitBounds(INDIA_BOX, { padding: fitPadding(), speed: 1.4 });
   }
 
   toggleProjection(): Projection {
@@ -309,32 +343,18 @@ export class SkyMap {
     }
   }
 
-  /** Send the satellites inside the current view (plus a margin) to the map. */
+  /**
+   * Send the satellites over India to the map: the same set as the "Over India" list.
+   * The selected satellite is always included, so it does not vanish when it leaves India.
+   */
   private push() {
     if (!this.ready || !this.sats.length) return;
-    const globe = this.projection === 'globe';
-    const b = this.map.getBounds();
-    const padLat = (b.getNorth() - b.getSouth()) * 0.15;
-    const padLon = (b.getEast() - b.getWest()) * 0.15;
-    const south = b.getSouth() - padLat;
-    const north = b.getNorth() + padLat;
-    const west = b.getWest() - padLon;
-    const east = b.getEast() + padLon;
-    const wide = globe || east - west >= 360;
-
     const features: GeoJSON.Feature[] = [];
     for (let i = 0; i < this.sats.length; i++) {
-      if (!this.shown[i]) continue;
-      const lat = this.lat[i];
-      let lon = this.lon[i];
-      if (!wide) {
-        if (lat < south || lat > north) continue;
-        // Bring the longitude into the view's range (the view may cross ±180°).
-        while (lon < west) lon += 360;
-        while (lon > east) lon -= 360;
-        if (lon < west) continue;
-      }
       const s = this.sats[i];
+      const lat = this.lat[i];
+      const lon = this.lon[i];
+      if (s !== this.selected && (!this.shown[i] || !isOverIndia(lat, lon))) continue;
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [lon, lat] },

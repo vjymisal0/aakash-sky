@@ -84,6 +84,14 @@ export const OWNERS: Record<string, string> = {
   LUXE: 'Luxembourg',
 };
 
+/**
+ * Objects not yet identified are listed under their launch designator only, e.g. "2024-205F".
+ * They are real, but to a casual viewer they are noise.
+ */
+export function isUnnamed(name: string): boolean {
+  return /^\d{4}-\d{3}[A-Z]{1,3}$/.test(name.trim());
+}
+
 export type OrbitClass = 'LEO' | 'MEO' | 'GEO' | 'HEO';
 
 export function orbitClass(meanMotion: number, eccentricity = 0): OrbitClass {

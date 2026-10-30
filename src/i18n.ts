@@ -53,6 +53,8 @@ const en = {
   showOnGlobe: 'Show on map',
   minutes: '{n} min',
   all: 'All',
+  unnamed: 'Unnamed',
+  unnamedHint: 'Objects known only by launch designator, such as 2024-205F',
   close: 'Close',
   back: 'Back',
   share: 'Share',

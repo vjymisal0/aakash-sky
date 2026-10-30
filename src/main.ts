@@ -7,7 +7,7 @@ import '@fontsource/doto/700.css';
 import '@fontsource/doto/900.css';
 import './style.css';
 import { decodeSat, periodMinutes, type Category, type RawCatalog, type RawSat, type Sat } from './core/catalog';
-import { compass, mission, orbitClass, OWNERS } from './core/describe';
+import { compass, isUnnamed, mission, orbitClass, OWNERS } from './core/describe';
 import { toIcs } from './core/ics';
 import { crossing, isOverIndia, subPoint, type Crossing } from './core/india';
 import { isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
@@ -46,6 +46,7 @@ const state = {
   passesDone: false,
   // Starlink and OneWeb are ~70% of the fleet and bury everything else, so they start hidden.
   layers: new Set<Category>(DEFAULT_LAYERS),
+  hideUnnamed: true,
   selected: null as Sat | null,
   following: false,
   overIndia: [] as OverItem[],
@@ -259,7 +260,10 @@ function renderChips() {
         (c) => `<button type="button" class="chip ${state.layers.has(c) ? 'on' : ''}" data-cat="${c}">
           <i style="background:${CATEGORY_COLORS[c]}"></i>${esc(tCategory(c))}<span class="mono">${fmtNum(counts.get(c)!)}</span></button>`,
       )
-      .join('');
+      .join('') +
+    `<button type="button" class="chip ${state.hideUnnamed ? '' : 'on'}" data-cat="unnamed" title="${esc(t('unnamedHint'))}"><i style="background:#5f636a"></i>${esc(
+      t('unnamed'),
+    )}<span class="mono">${fmtNum(state.sats.filter((s) => isUnnamed(s.name)).length)}</span></button>`;
 }
 
 // ---------- over India ----------
@@ -638,7 +642,7 @@ function setPlace(p: Place) {
 }
 
 function applyLayers() {
-  sky.setFilter((s) => state.layers.has(s.category));
+  sky.setFilter((s) => state.layers.has(s.category) && !(state.hideUnnamed && isUnnamed(s.name)));
   renderChips();
   if (state.sats.length) refreshOverIndia();
 }
@@ -668,7 +672,8 @@ $('#chips').addEventListener('click', (e) => {
   if (!cat) return;
   const all = state.layers.size === CATEGORY_ORDER.length;
   // "All" flips between everything and the uncluttered default; other chips toggle one layer.
-  if (cat === 'all') state.layers = all ? new Set(DEFAULT_LAYERS) : new Set(CATEGORY_ORDER);
+  if (cat === 'unnamed') state.hideUnnamed = !state.hideUnnamed;
+  else if (cat === 'all') state.layers = all ? new Set(DEFAULT_LAYERS) : new Set(CATEGORY_ORDER);
   else {
     if (state.layers.has(cat as Category)) state.layers.delete(cat as Category);
     else state.layers.add(cat as Category);

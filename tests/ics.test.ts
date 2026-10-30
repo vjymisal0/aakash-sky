@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { escapeText, fold, toIcs } from '../src/core/ics';
-import { compass, mission, orbitClass } from '../src/core/describe';
+import { compass, isUnnamed, mission, orbitClass } from '../src/core/describe';
 
 describe('ics', () => {
   const ics = toIcs(
@@ -54,6 +54,14 @@ describe('describe', () => {
     expect(mission({ name: 'NISAR', category: 'india' })).toBe('radar');
     expect(mission({ name: 'EOS-06 (OCEANSAT-3)', category: 'india' })).toBe('ocean');
     expect(mission({ name: 'DRISHTI', category: 'india' })).toBeNull();
+  });
+
+  it('spots objects known only by launch designator', () => {
+    expect(isUnnamed('2024-205F')).toBe(true);
+    expect(isUnnamed('2026-052G')).toBe(true);
+    expect(isUnnamed('CARTOSAT-3')).toBe(false);
+    expect(isUnnamed('AAGAMAN OBJECT A')).toBe(false);
+    expect(isUnnamed('STARLINK-1007')).toBe(false);
   });
 
   it('classifies orbits', () => {
