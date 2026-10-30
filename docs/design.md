@@ -20,7 +20,8 @@ Success means a first-time visitor reaches their next visible pass in under 10 s
 | Reminders | `.ics` download with a 10-minute alarm | Works on every phone with no backend or stored locations. Web push is deferred to v2. |
 | Language | English only | Hindi was built and then removed at the owner's request. All copy stays in `src/i18n.ts`. |
 | Location privacy | Geolocation rounded to 0.01° and stored only in `localStorage` | Pass times do not need more precision. Nothing leaves the device. |
-| Look | Near-black, single saffron accent, Space Grotesk for prose, JetBrains Mono for data | Instrument-like and calm. Every pixel on screen is real data. |
+| Look | Near-black, single saffron accent, Space Grotesk for prose, JetBrains Mono for data, Doto for headline numbers | Instrument-like and calm. Every pixel on screen is real data. |
+| Over India | Live list of satellites whose ground point is inside a coarse India outline | Answers "what is above us right now" the way a flight tracker lists aircraft in the airspace. |
 
 ## Out of scope for v1
 
