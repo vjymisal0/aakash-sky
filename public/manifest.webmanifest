@@ -1,0 +1,11 @@
+{
+  "name": "Aakash · Live satellites over India",
+  "short_name": "Aakash",
+  "description": "Live 3D satellite tracker. See when the space station passes over your city.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#08090b",
+  "theme_color": "#08090b",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
