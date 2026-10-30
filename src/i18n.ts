@@ -5,16 +5,32 @@ import type { Mission } from './core/describe';
 const en = {
   tagline: 'Live satellites',
   live: 'LIVE',
-  inOrbit: 'in orbit',
+  booting: 'scanning Indian skies…',
   search: 'Search satellite or NORAD ID',
+  tabGlobe: 'Globe',
+  tabIndia: 'Over India',
+  tabTonight: 'Tonight',
   welcomeTitle: 'Satellites over India, live',
   welcomeBody:
-  'Every dot on the globe is a real satellite, positioned from public orbital data. Find out when the space station flies over your city tonight.',
-  welcomeNote: 'Times and positions are computed from published orbits and can drift by a few seconds. Not for any safety-critical use.',
+    'Every dot on the globe is a real satellite, positioned from public orbital data. See what is crossing India right now, and when the space station flies over your city.',
+  welcomeNote: 'Positions are computed from published orbits and can drift by a few seconds. For information only, never for safety-critical use.',
   explore: 'Explore the globe',
   findPass: 'When can I see one?',
+  overIndiaTitle: 'Over India now',
+  overhead: 'overhead',
+  overIndiaChip: '{n} over India',
+  filterList: 'Filter list · ISS, CARTOSAT, STARLINK',
+  found: '{n} found',
+  noneOver: 'Nothing in the selected layers is over India this moment. Give it a minute: a satellite crosses every few seconds.',
+  noMatch: 'No satellite over India matches “{q}”.',
+  sunlit: 'Sunlit',
+  shadow: 'In shadow',
+  leavesIn: 'leaves in {t}',
+  leavingNow: 'leaving now',
+  stays: 'stays overhead',
   location: 'Your location',
   useMyLocation: 'Use my location',
+  nearMe: 'Near me',
   myLocation: 'My location',
   locating: 'Locating…',
   locationDenied: 'Location unavailable. Pick a city instead.',
@@ -34,24 +50,32 @@ const en = {
   addCalendar: 'Add to calendar',
   showOnGlobe: 'Show on globe',
   minutes: '{n} min',
-  filters: 'Layers',
   all: 'All',
-  details: 'Satellite',
   close: 'Close',
+  back: 'Back',
+  share: 'Share',
+  linkCopied: 'Link copied',
+  trackLive: 'Track live',
+  stopTracking: 'Stop tracking',
+  overIndiaNow: 'Over India',
+  overPoint: 'Over {pos}',
+  visibleFrom: 'Visible from {place} {when}',
+  notVisibleWeek: 'No naked-eye pass from {place} in the next 7 days',
+  tooFaint: 'Too faint to see with the naked eye',
   norad: 'NORAD ID',
   cospar: 'International ID',
   owner: 'Owner',
   launched: 'Launched',
-  mission: 'Mission',
   orbit: 'Orbit',
   altitude: 'Altitude',
   speed: 'Speed',
+  heading: 'Heading',
   period: 'Period',
   inclination: 'Inclination',
-  position: 'Over',
+  position: 'Ground point',
   lighting: 'Lighting',
-  sunlit: 'In sunlight',
-  shadow: "In Earth's shadow",
+  inSunlight: 'In sunlight',
+  inShadow: "In Earth's shadow",
   elementsAge: 'Orbit data age',
   hoursAgo: '{n} h old',
   dataFrom: 'Orbital data',
@@ -59,7 +83,6 @@ const en = {
   notForSafety: 'Approximate · not for safety-critical use',
   calendarTitle: '{name} visible: {from} → {to}, up to {el}°',
   calendarBody: 'Look {from} at {start}. It climbs to {el}° in the {max} and fades {to}. From {place}. Computed by Aakash from CelesTrak data.',
-  lookUp: 'Look up',
   noResults: 'No satellite matches',
 } as const;
 
@@ -73,6 +96,17 @@ const categories: Record<Category, string> = {
   starlink: 'Starlink',
   oneweb: 'OneWeb',
   other: 'Other',
+};
+
+/** Two-letter badges for list cards, like airline codes. */
+const badges: Record<Category, string> = {
+  station: 'ST',
+  india: 'IN',
+  gnss: 'NV',
+  weather: 'WX',
+  starlink: 'SL',
+  oneweb: 'OW',
+  other: 'SA',
 };
 
 const missions: Record<Mission, string> = {
@@ -93,5 +127,6 @@ export function t(key: Key, vars: Record<string, string | number> = {}): string 
 }
 
 export const tCategory = (c: Category) => categories[c];
+export const tBadge = (c: Category) => badges[c];
 export const tMission = (m: Mission) => missions[m];
 export const LOCALE = 'en-IN';

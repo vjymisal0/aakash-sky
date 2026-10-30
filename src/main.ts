@@ -3,42 +3,58 @@ import '@fontsource/space-grotesk/500.css';
 import '@fontsource/space-grotesk/700.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/600.css';
+import '@fontsource/doto/700.css';
+import '@fontsource/doto/900.css';
 import './style.css';
-import { eciToGeodetic, gstime, degreesLat, degreesLong } from 'satellite.js';
 import { decodeSat, periodMinutes, type Category, type RawCatalog, type RawSat, type Sat } from './core/catalog';
 import { compass, mission, orbitClass, OWNERS } from './core/describe';
 import { toIcs } from './core/ics';
+import { crossing, isOverIndia, subPoint, type Crossing } from './core/india';
 import { isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
 import { CITIES } from './data/cities';
 import { CATEGORY_COLORS, Globe } from './globe';
-import { LOCALE, t, tCategory, tMission } from './i18n';
+import { LOCALE, t, tBadge, tCategory, tMission } from './i18n';
 import type { PassRequest, PassResponse } from './passes.worker';
 
 const CATEGORY_ORDER: Category[] = ['india', 'station', 'starlink', 'gnss', 'weather', 'oneweb', 'other'];
+/** Order of the "Over India" list: what people care about first, the Starlink flood last. */
+const LIST_PRIORITY: Category[] = ['station', 'india', 'weather', 'gnss', 'other', 'oneweb', 'starlink'];
 /** ISS and Tiangong outshine everything else in the catalog. */
 const VERY_BRIGHT = new Set([25544, 48274]);
 const PASS_DAYS = 7;
+
+type View = 'india' | 'tonight';
+type Tab = 'globe' | View;
 
 interface Place extends Observer {
   name: string;
   cityId?: string;
 }
 
+interface OverItem {
+  sat: Sat;
+  crossing: Crossing;
+}
+
 const state = {
   sats: [] as Sat[],
   raw: [] as RawSat[],
   byNorad: new Map<number, Sat>(),
-  generatedAt: '',
   place: loadPlace(),
   passes: [] as Pass[],
   passesDone: false,
   layers: new Set<Category>(CATEGORY_ORDER),
   selected: null as Sat | null,
-  selectedPass: null as Pass | null | undefined,
+  following: false,
+  overIndia: [] as OverItem[],
+  listFilter: '',
+  tab: (matchMedia('(max-width: 820px)').matches ? 'globe' : 'india') as Tab,
 };
+const crossings = new Map<number, Crossing>();
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+const isMobile = () => matchMedia('(max-width: 820px)').matches;
 
 function loadPlace(): Place {
   try {
@@ -52,9 +68,7 @@ function loadPlace(): Place {
 }
 
 function placeName(p: Place) {
-  const city = CITIES.find((c) => c.id === p.cityId);
-  if (city) return city.name;
-  return t('myLocation');
+  return CITIES.find((c) => c.id === p.cityId)?.name ?? t('myLocation');
 }
 
 // ---------- formatting ----------
@@ -63,19 +77,49 @@ const fmtTime = (d: Date) => new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', 
 const fmtDay = (d: Date) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' }).format(d);
 const fmtNum = (n: number, digits = 0) => new Intl.NumberFormat(LOCALE, { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(n);
 const tzName = () =>
-  new Intl.DateTimeFormat('en-IN', { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? '';
+  new Intl.DateTimeFormat(LOCALE, { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? '';
+const fmtLatLon = (lat: number, lon: number) =>
+  `${fmtNum(Math.abs(lat), 1)}°${lat >= 0 ? 'N' : 'S'} ${fmtNum(Math.abs(lon), 1)}°${lon >= 0 ? 'E' : 'W'}`;
 
-function countdown(p: Pass, now = Date.now()) {
-  const ms = p.start.time.getTime() - now;
+function untilText(ms: number) {
   if (ms <= 0) return t('now');
   const min = Math.round(ms / 60_000);
+  if (min < 1) return '<1 min';
   if (min < 60) return t('inMin', { n: min });
   if (min < 24 * 60) return t('inHours', { h: Math.floor(min / 60), m: min % 60 });
   return t('inDays', { d: Math.floor(min / 1440), h: Math.floor((min % 1440) / 60) });
 }
 
+const countdown = (p: Pass) => untilText(p.start.time.getTime() - Date.now());
+
+function leavesText(c: Crossing, now: Date) {
+  if (!c.leaves) return t('stays');
+  const ms = c.leaves.getTime() - now.getTime();
+  return ms < 30_000 ? t('leavingNow') : t('leavesIn', { t: untilText(ms).replace(/^in /, '') });
+}
 const dir = (pt: PassPoint) => compass(pt.azimuth);
 const durationMin = (p: Pass) => Math.max(1, Math.round((p.end.time.getTime() - p.start.time.getTime()) / 60_000));
+
+/** Live state of one satellite: ground point, direction of travel, speed, sunlight. */
+function liveState(sat: Sat, now = new Date()) {
+  const p = subPoint(sat.satrec, now);
+  const next = subPoint(sat.satrec, new Date(now.getTime() + 10_000));
+  const eci = satEci(sat.satrec, now);
+  const eci2 = satEci(sat.satrec, new Date(now.getTime() + 1000));
+  if (!p || !next || !eci || !eci2) return null;
+  const la1 = (p.lat * Math.PI) / 180;
+  const la2 = (next.lat * Math.PI) / 180;
+  const dLon = ((next.lon - p.lon) * Math.PI) / 180;
+  const bearing = (Math.atan2(Math.sin(dLon) * Math.cos(la2), Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon)) * 180) / Math.PI;
+  return {
+    ...p,
+    heading: compass(bearing),
+    speed: Math.hypot(eci2.x - eci.x, eci2.y - eci.y, eci2.z - eci.z),
+    lit: isSunlit(eci, now),
+  };
+}
+
+const MARK = `<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><ellipse cx="12" cy="12" rx="10.5" ry="4" transform="rotate(-24 12 12)"/><circle cx="21" cy="8" r="1.4" class="sat"/></svg>`;
 
 // ---------- layout ----------
 
@@ -83,83 +127,118 @@ function renderShell() {
   $('#app').innerHTML = `
     <header class="bar">
       <div class="brand">
-        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><ellipse cx="12" cy="12" rx="10.5" ry="4" transform="rotate(-24 12 12)"/><circle cx="21" cy="8" r="1.4" class="sat"/></svg>
+        ${MARK}
         <span class="wordmark">AAKASH</span>
-        <span class="tagline" data-t="tagline"></span>
+        <span class="tagline">${esc(t('tagline'))}</span>
       </div>
+      <nav class="nav" aria-label="Sections">
+        <button type="button" data-tab="india">${esc(t('tabIndia'))}</button>
+        <button type="button" data-tab="tonight">${esc(t('tabTonight'))}</button>
+      </nav>
       <div class="search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-        <input id="q" type="search" autocomplete="off" spellcheck="false" />
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="${esc(t('search'))}" />
         <kbd>Ctrl K</kbd>
         <ul id="results" class="results" hidden></ul>
       </div>
       <div class="bar-right">
-        <span class="pill live"><i></i><span class="pill-label"><span data-t="live"></span> ·</span> <b id="count">—</b></span>
+        <span class="pill live"><i></i><span class="pill-label">${esc(t('live'))} ·</span> <b id="count">—</b></span>
         <span class="clock mono" id="clock"></span>
       </div>
     </header>
     <main class="layout">
       <aside class="panel" id="panel">
-        <div class="grab" aria-hidden="true"></div>
-        <section class="loc">
-          <div class="label" data-t="location"></div>
-          <div class="loc-row">
-            <select id="city"></select>
-            <button class="btn ghost icon" id="geo" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
-            </button>
+        <section class="view view-india">
+          <div class="view-head">
+            <div class="label">${esc(t('overIndiaTitle'))}</div>
+            <div class="big-count"><b class="doto" id="india-count">—</b><span class="label">${esc(t('overhead'))}</span></div>
           </div>
-          <div class="hint" id="geo-hint"></div>
+          <label class="filter">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+            <input id="list-filter" type="search" autocomplete="off" spellcheck="false" placeholder="${esc(t('filterList'))}" />
+          </label>
+          <div class="label row"><span>${esc(t('live'))}</span><span id="india-found"></span></div>
+          <div id="india-list" class="sat-list"></div>
         </section>
-        <section id="hero"></section>
-        <section class="upcoming">
-          <div class="label row"><span data-t="upcoming"></span><span class="mono dim" id="upcoming-count"></span></div>
-          <div id="list"></div>
+        <section class="view view-tonight">
+          <div class="loc">
+            <div class="label">${esc(t('location'))}</div>
+            <div class="loc-row">
+              <select id="city"></select>
+              <button class="btn ghost icon" id="geo" type="button" title="${esc(t('useMyLocation'))}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
+              </button>
+            </div>
+            <div class="hint" id="geo-hint"></div>
+          </div>
+          <div id="hero"></div>
+          <div class="upcoming">
+            <div class="label row"><span>${esc(t('upcoming'))}</span><span class="mono dim" id="upcoming-count"></span></div>
+            <div id="list"></div>
+          </div>
         </section>
       </aside>
       <div class="stage">
         <div id="globe"></div>
+        <button type="button" class="overlay-chip" id="india-chip" data-tab="india"><i></i><span id="india-chip-text">—</span></button>
         <div class="chips" id="chips"></div>
+        <button type="button" class="btn ghost near-me" id="near-me">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+          <span>${esc(t('nearMe'))}</span>
+        </button>
         <article class="info card" id="info" hidden></article>
         <footer class="attrib">
-          <span><span data-t="dataFrom"></span> <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a> · <span data-t="updated"></span> <span id="updated" class="mono">—</span></span>
-          <span class="dim" data-t="notForSafety"></span>
+          <span>${esc(t('dataFrom'))} <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a> · ${esc(t('updated'))} <span id="updated" class="mono">—</span></span>
+          <span class="dim">${esc(t('notForSafety'))}</span>
         </footer>
       </div>
     </main>
+    <nav class="tabbar" aria-label="Sections">
+      <button type="button" data-tab="globe">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.4 2.6 14.6 0 17M12 3.5c-2.6 2.4-2.6 14.6 0 17"/></svg>
+        <span>${esc(t('tabGlobe'))}</span>
+      </button>
+      <button type="button" data-tab="india">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M5 19 19 5M8 5h11v11"/></svg>
+        <span>${esc(t('tabIndia'))}</span>
+      </button>
+      <button type="button" data-tab="tonight">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14.5A8 8 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></svg>
+        <span>${esc(t('tabTonight'))}</span>
+      </button>
+    </nav>
+    <div class="boot" id="boot">
+      <span class="doto wordmark-big">AAKASH</span>
+      <span class="mono dim">${esc(t('booting'))}</span>
+    </div>
+    <div class="toast" id="toast" hidden></div>
     <div class="welcome" id="welcome" hidden>
       <div class="card">
-        <svg class="mark big" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><ellipse cx="12" cy="12" rx="10.5" ry="4" transform="rotate(-24 12 12)"/><circle cx="21" cy="8" r="1.4" class="sat"/></svg>
-        <h1 data-t="welcomeTitle"></h1>
-        <p data-t="welcomeBody"></p>
-        <p class="small dim" data-t="welcomeNote"></p>
+        ${MARK.replace('class="mark"', 'class="mark big"')}
+        <h1 class="doto">${esc(t('welcomeTitle'))}</h1>
+        <p>${esc(t('welcomeBody'))}</p>
+        <p class="small dim">${esc(t('welcomeNote'))}</p>
         <div class="actions">
-          <button class="btn ghost" id="w-explore" type="button" data-t="explore"></button>
-          <button class="btn primary" id="w-pass" type="button" data-t="findPass"></button>
+          <button class="btn ghost" id="w-explore" type="button">${esc(t('explore'))}</button>
+          <button class="btn primary" id="w-pass" type="button">${esc(t('findPass'))}</button>
         </div>
       </div>
     </div>
   `;
 }
 
-function applyStrings() {
-  document.querySelectorAll<HTMLElement>('[data-t]').forEach((el) => {
-    el.textContent = t(el.dataset.t as Parameters<typeof t>[0]);
-  });
-  $<HTMLInputElement>('#q').placeholder = t('search');
-  $('#geo').title = t('useMyLocation');
-  renderCities();
-  renderChips();
-  renderPasses();
-  renderInfo();
+function setTab(tab: Tab) {
+  // Desktop always shows the globe, so "globe" falls back to the list.
+  if (!isMobile() && tab === 'globe') tab = 'india';
+  state.tab = tab;
+  document.body.dataset.tab = tab;
+  document.querySelectorAll<HTMLElement>('button[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
 }
 
 function renderCities() {
-  const sel = $<HTMLSelectElement>('#city');
   const custom = state.place.cityId ? '' : `<option value="" selected>${esc(t('myLocation'))}</option>`;
-  sel.innerHTML =
-    custom +
-    CITIES.map((c) => `<option value="${c.id}" ${c.id === state.place.cityId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  $<HTMLSelectElement>('#city').innerHTML =
+    custom + CITIES.map((c) => `<option value="${c.id}" ${c.id === state.place.cityId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
 }
 
 function renderChips() {
@@ -174,6 +253,79 @@ function renderChips() {
           <i style="background:${CATEGORY_COLORS[c]}"></i>${esc(tCategory(c))}<span class="mono">${fmtNum(counts.get(c)!)}</span></button>`,
       )
       .join('');
+}
+
+// ---------- over India ----------
+
+function refreshOverIndia() {
+  const now = new Date();
+  const found: OverItem[] = [];
+  const seen = new Set<number>();
+  for (let i = 0; i < state.sats.length; i++) {
+    if (!globe.isShown(i)) continue;
+    const [lat, lon] = globe.approxLatLon(i);
+    if (!isOverIndia(lat, lon)) continue;
+    const sat = state.sats[i];
+    let c = crossings.get(sat.norad);
+    if (!c || (c.leaves && c.leaves.getTime() < now.getTime())) {
+      c = crossing(sat.satrec, now);
+      crossings.set(sat.norad, c);
+    }
+    seen.add(sat.norad);
+    found.push({ sat, crossing: c });
+  }
+  for (const k of crossings.keys()) if (!seen.has(k)) crossings.delete(k);
+  found.sort(
+    (a, b) => LIST_PRIORITY.indexOf(a.sat.category) - LIST_PRIORITY.indexOf(b.sat.category) || a.sat.name.localeCompare(b.sat.name),
+  );
+  state.overIndia = found;
+  renderOverIndia();
+}
+
+function renderOverIndia() {
+  const n = state.overIndia.length;
+  $('#india-count').textContent = state.sats.length ? fmtNum(n) : '—';
+  $('#india-chip-text').textContent = t('overIndiaChip', { n: fmtNum(n) });
+  const q = state.listFilter.trim().toUpperCase();
+  const items = q ? state.overIndia.filter((x) => x.sat.name.includes(q) || String(x.sat.norad) === q) : state.overIndia;
+  $('#india-found').textContent = t('found', { n: fmtNum(items.length) });
+  const list = $('#india-list');
+  if (!items.length) {
+    list.innerHTML = `<p class="empty">${esc(q ? t('noMatch', { q: state.listFilter.trim() }) : t('noneOver'))}</p>`;
+    return;
+  }
+  const now = new Date();
+  // Cap the DOM: a phone does not need 300 cards; the filter reaches the rest.
+  list.innerHTML = items.slice(0, 120).map((x) => satCard(x, now)).join('');
+}
+
+function satCard({ sat, crossing: c }: OverItem, now: Date) {
+  const live = liveState(sat, now);
+  if (!live) return '';
+  const m = mission(sat);
+  const total = c.leaves ? c.leaves.getTime() - c.entered.getTime() : 0;
+  const pct = c.leaves && total > 0 ? Math.min(100, Math.max(4, ((now.getTime() - c.entered.getTime()) / total) * 100)) : 100;
+  const leaves = leavesText(c, now);
+  return `
+    <article class="sat-card ${state.selected === sat ? 'on' : ''}" data-norad="${sat.norad}" tabindex="0">
+      <span class="badge" style="--c:${CATEGORY_COLORS[sat.category]}">${tBadge(sat.category)}</span>
+      <div class="sc-body">
+        <div class="sc-top">
+          <b class="mono name">${esc(sat.name)}</b>
+          <span class="tag live">${esc(t('live'))}</span>
+          <span class="sc-state ${live.lit ? 'lit' : ''}">${esc(live.lit ? t('sunlit') : t('shadow'))}</span>
+        </div>
+        <div class="sc-mid">
+          <span class="doto num">${fmtNum(live.heightKm)}</span><small>km</small>
+          <span class="arrow">→</span>
+          <span class="doto num">${live.heading}</span>
+          <span class="mono speed">${fmtNum(live.speed, 2)} km/s</span>
+        </div>
+        <div class="sc-sub">${esc(m ? tMission(m) : tCategory(sat.category))} · <span class="mono">${fmtLatLon(live.lat, live.lon)}</span></div>
+        <div class="sc-bar"><span style="width:${pct}%"></span></div>
+        <div class="sc-foot mono">${esc(leaves)}</div>
+      </div>
+    </article>`;
 }
 
 // ---------- passes ----------
@@ -211,13 +363,11 @@ function passCard(p: Pass, hero: boolean) {
 }
 
 function trackStop(pt: PassPoint, label: string) {
-  return `<div class="stop"><b class="mono">${esc(fmtTime(pt.time))}</b><span class="mono">${esc(dir(pt))} ${fmtNum(pt.elevation)}°</span><small>${esc(label)}</small></div>`;
+  return `<div class="stop"><b class="doto">${esc(fmtTime(pt.time))}</b><span class="mono">${esc(dir(pt))} ${fmtNum(pt.elevation)}°</span><small>${esc(label)}</small></div>`;
 }
 
-function upcomingPasses() {
-  const now = Date.now();
-  return state.passes.filter((p) => p.end.time.getTime() > now);
-}
+const upcomingPasses = () => state.passes.filter((p) => p.end.time.getTime() > Date.now());
+const nextPassFor = (sat: Sat) => state.passes.find((p) => p.norad === sat.norad && p.end.time.getTime() > Date.now()) ?? null;
 
 /** Hero prefers the next very-bright pass (ISS/Tiangong) within 48 h, else the next of anything. */
 function heroPass(list: Pass[]) {
@@ -228,15 +378,16 @@ function heroPass(list: Pass[]) {
 function renderPasses() {
   const list = upcomingPasses();
   const hero = heroPass(list);
-  const heroEl = $('#hero');
-  if (hero) heroEl.innerHTML = passCard(hero, true);
-  else
-    heroEl.innerHTML = `<div class="pass hero empty"><div class="label">${esc(t('nextPass'))}</div><p>${esc(
-      state.passesDone ? t('noPasses') : t('computing'),
-    )}</p>${state.passesDone ? '' : '<div class="loader"></div>'}</div>`;
-
-  const rest = list.filter((p) => p !== hero).slice(0, 40);
-  $('#list').innerHTML = rest.map((p) => passCard(p, false)).join('');
+  $('#hero').innerHTML = hero
+    ? passCard(hero, true)
+    : `<div class="pass hero empty"><div class="label">${esc(t('nextPass'))}</div><p>${esc(state.passesDone ? t('noPasses') : t('computing'))}</p>${
+        state.passesDone ? '' : '<div class="loader"></div>'
+      }</div>`;
+  $('#list').innerHTML = list
+    .filter((p) => p !== hero)
+    .slice(0, 40)
+    .map((p) => passCard(p, false))
+    .join('');
   $('#upcoming-count').textContent = list.length ? fmtNum(list.length) : '';
 }
 
@@ -257,18 +408,14 @@ function computePasses() {
     state.passes = e.data.passes;
     state.passesDone = e.data.done;
     renderPasses();
-    if (state.selected && !state.selectedPass) {
-      state.selectedPass = state.passes.find((p) => p.norad === state.selected!.norad && p.end.time.getTime() > Date.now());
-      if (state.selectedPass) renderInfo();
-    }
+    if (state.selected) renderInfo();
   };
   const { lat, lon } = state.place;
   worker.postMessage({ id, sats: visual, observer: { lat, lon }, from: Date.now() - 15 * 60_000, days: PASS_DAYS } satisfies PassRequest);
 }
 
 function downloadIcs(p: Pass) {
-  const sat = state.byNorad.get(p.norad);
-  const name = sat?.name ?? String(p.norad);
+  const name = state.byNorad.get(p.norad)?.name ?? String(p.norad);
   const vars = { name, from: dir(p.start), to: dir(p.end), el: fmtNum(p.max.elevation), max: dir(p.max), start: fmtTime(p.start.time), place: placeName(state.place) };
   const ics = toIcs({
     uid: `${p.norad}-${p.start.time.getTime()}@aakash`,
@@ -289,10 +436,23 @@ function downloadIcs(p: Pass) {
 
 function select(sat: Sat | null, fly = false) {
   state.selected = sat;
-  state.selectedPass = sat ? state.passes.find((p) => p.norad === sat.norad && p.end.time.getTime() > Date.now()) : null;
+  setFollowing(false);
   globe.select(sat, fly);
+  history.replaceState(null, '', sat ? `#sat=${sat.norad}` : location.pathname + location.search);
   renderInfo();
-  if (sat && matchMedia('(max-width: 820px)').matches) $('#panel').classList.add('collapsed');
+  document.querySelectorAll('.sat-card.on').forEach((el) => el.classList.remove('on'));
+  if (sat) document.querySelector(`.sat-card[data-norad="${sat.norad}"]`)?.classList.add('on');
+  if (sat && isMobile()) setTab('globe');
+}
+
+function setFollowing(on: boolean) {
+  state.following = on;
+  globe.follow(on ? state.selected : null);
+  const b = document.getElementById('track');
+  if (b) {
+    b.classList.toggle('active', on);
+    b.querySelector('span')!.textContent = on ? t('stopTracking') : t('trackLive');
+  }
 }
 
 function renderInfo() {
@@ -305,14 +465,34 @@ function renderInfo() {
   el.hidden = false;
   const m = mission(sat);
   const owner = OWNERS[sat.owner] ?? sat.owner;
+  const pass = nextPassFor(sat);
   el.innerHTML = `
     <header>
-      <div>
+      <button type="button" class="btn ghost icon" id="info-close" aria-label="${esc(t('back'))}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="info-title">
         <div class="label"><i class="dot" style="background:${CATEGORY_COLORS[sat.category]}"></i>${esc(tCategory(sat.category))}${m ? ` · ${esc(tMission(m))}` : ''}</div>
         <h2>${esc(sat.name)}</h2>
       </div>
-      <button type="button" class="btn ghost icon" id="info-close" aria-label="${esc(t('close'))}">×</button>
+      <button type="button" class="btn ghost icon" id="share" aria-label="${esc(t('share'))}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M8 8l4-4 4 4M5 13v6h14v-6"/></svg>
+      </button>
     </header>
+    <div class="statement">
+      <div class="doto headline" id="info-headline"></div>
+      <div class="sc-bar" id="info-bar" hidden><span></span></div>
+      <p class="sub" id="info-sub"></p>
+    </div>
+    <button type="button" class="btn primary wide ${state.following ? 'active' : ''}" id="track">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg>
+      <span>${esc(state.following ? t('stopTracking') : t('trackLive'))}</span>
+    </button>
+    ${
+      pass
+        ? `<div class="info-pass">${passCard(pass, false)}</div>`
+        : ''
+    }
     <dl class="grid live" id="info-live"></dl>
     <dl class="grid">
       ${row(t('norad'), String(sat.norad))}
@@ -324,7 +504,6 @@ function renderInfo() {
       ${row(t('inclination'), `${fmtNum(sat.inclination, 1)}°`)}
       ${row(t('elementsAge'), t('hoursAgo', { n: fmtNum((Date.now() - Date.parse(sat.epoch + 'Z')) / 3_600_000) }))}
     </dl>
-    ${state.selectedPass ? `<div class="info-pass">${passCard(state.selectedPass, false)}</div>` : ''}
   `;
   updateInfoLive();
 }
@@ -338,19 +517,61 @@ function updateInfoLive() {
   const el = document.getElementById('info-live');
   if (!sat || !el) return;
   const now = new Date();
-  const eci = satEci(sat.satrec, now);
-  if (!eci) return;
-  const geo = eciToGeodetic(eci, gstime(now));
-  const next = satEci(sat.satrec, new Date(now.getTime() + 1000));
-  const speed = next ? Math.hypot(next.x - eci.x, next.y - eci.y, next.z - eci.z) : 0;
-  const lat = degreesLat(geo.latitude);
-  const lon = degreesLong(geo.longitude);
+  const live = liveState(sat, now);
+  if (!live) return;
   el.innerHTML = `
-    ${row(t('altitude'), `${fmtNum(geo.height)} km`)}
-    ${row(t('speed'), `${fmtNum(speed, 2)} km/s`)}
-    ${row(t('position'), `${fmtNum(Math.abs(lat), 2)}°${lat >= 0 ? 'N' : 'S'} ${fmtNum(Math.abs(lon), 2)}°${lon >= 0 ? 'E' : 'W'}`)}
-    ${row(t('lighting'), isSunlit(eci, now) ? t('sunlit') : t('shadow'), false)}
+    ${row(t('altitude'), `${fmtNum(live.heightKm)} km`)}
+    ${row(t('speed'), `${fmtNum(live.speed, 2)} km/s`)}
+    ${row(t('position'), fmtLatLon(live.lat, live.lon))}
+    ${row(t('heading'), live.heading)}
+    ${row(t('lighting'), live.lit ? t('inSunlight') : t('inShadow'), false)}
   `;
+
+  // The one-line answer, like a flight tracker's "Arrives in 28m".
+  const over = isOverIndia(live.lat, live.lon);
+  const c = over ? (crossings.get(sat.norad) ?? crossing(sat.satrec, now)) : null;
+  $('#info-headline').textContent = over ? t('overIndiaNow') : t('overPoint', { pos: fmtLatLon(live.lat, live.lon) });
+  const bar = $('#info-bar');
+  bar.hidden = !c?.leaves;
+  if (c?.leaves) {
+    const total = c.leaves.getTime() - c.entered.getTime();
+    (bar.firstElementChild as HTMLElement).style.width = `${Math.min(100, Math.max(4, ((now.getTime() - c.entered.getTime()) / total) * 100))}%`;
+  }
+  const pass = nextPassFor(sat);
+  const place = placeName(state.place);
+  let sub = sat.visual
+    ? pass
+      ? t('visibleFrom', { place, when: countdown(pass) })
+      : state.passesDone
+        ? t('notVisibleWeek', { place })
+        : t('computing')
+    : t('tooFaint');
+  if (c) sub = `${leavesText(c, now)} · ${sub}`;
+  $('#info-sub').textContent = sub;
+}
+
+async function share() {
+  const sat = state.selected;
+  if (!sat) return;
+  const url = `${location.origin}${location.pathname}#sat=${sat.norad}`;
+  try {
+    if (navigator.share) await navigator.share({ title: `${sat.name} · Aakash`, url });
+    else {
+      await navigator.clipboard.writeText(url);
+      toast(t('linkCopied'));
+    }
+  } catch {
+    // user cancelled the share sheet
+  }
+}
+
+let toastTimer = 0;
+function toast(msg: string) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (el.hidden = true), 1800);
 }
 
 // ---------- search ----------
@@ -384,8 +605,12 @@ function search(q: string) {
 // ---------- wiring ----------
 
 renderShell();
+setTab(state.tab);
 
-const globe = new Globe($('#globe'), { onSelect: (s) => select(s) });
+const globe = new Globe($('#globe'), {
+  onSelect: (s) => select(s),
+  onFollowEnd: () => setFollowing(false),
+});
 
 function setPlace(p: Place) {
   state.place = p;
@@ -398,6 +623,27 @@ function setPlace(p: Place) {
 function applyLayers() {
   globe.setFilter((s) => state.layers.has(s.category));
   renderChips();
+  if (state.sats.length) refreshOverIndia();
+}
+
+function locate(after?: (lat: number, lon: number) => void) {
+  const hint = $('#geo-hint');
+  hint.textContent = t('locating');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      hint.textContent = '';
+      // Round to ~1 km: plenty for pass times and avoids storing an exact home location.
+      const lat = +pos.coords.latitude.toFixed(2);
+      const lon = +pos.coords.longitude.toFixed(2);
+      setPlace({ name: 'me', lat, lon });
+      after?.(lat, lon);
+    },
+    () => {
+      hint.textContent = t('locationDenied');
+      toast(t('locationDenied'));
+    },
+    { timeout: 10_000, maximumAge: 3_600_000 },
+  );
 }
 
 $('#chips').addEventListener('click', (e) => {
@@ -407,7 +653,8 @@ $('#chips').addEventListener('click', (e) => {
   if (cat === 'all') state.layers = new Set(CATEGORY_ORDER);
   else if (all) state.layers = new Set([cat as Category]);
   else {
-    state.layers.has(cat as Category) ? state.layers.delete(cat as Category) : state.layers.add(cat as Category);
+    if (state.layers.has(cat as Category)) state.layers.delete(cat as Category);
+    else state.layers.add(cat as Category);
     if (!state.layers.size) state.layers = new Set(CATEGORY_ORDER);
   }
   applyLayers();
@@ -418,22 +665,26 @@ $('#city').addEventListener('change', (e) => {
   if (c) setPlace({ name: c.name, cityId: c.id, lat: c.lat, lon: c.lon });
 });
 
-$('#geo').addEventListener('click', () => {
-  const hint = $('#geo-hint');
-  hint.textContent = t('locating');
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      hint.textContent = '';
-      // Round to ~1 km: plenty for pass times and avoids storing an exact home location.
-      setPlace({ name: 'me', lat: +pos.coords.latitude.toFixed(2), lon: +pos.coords.longitude.toFixed(2) });
-    },
-    () => (hint.textContent = t('locationDenied')),
-    { timeout: 10_000, maximumAge: 3_600_000 },
-  );
+$('#geo').addEventListener('click', () => locate());
+$('#near-me').addEventListener('click', () => {
+  globe.flyToLatLon(state.place.lat, state.place.lon);
+  locate((lat, lon) => globe.flyToLatLon(lat, lon));
+});
+
+const listFilter = $<HTMLInputElement>('#list-filter');
+listFilter.addEventListener('input', () => {
+  state.listFilter = listFilter.value;
+  renderOverIndia();
 });
 
 document.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
+  // Only buttons: <body> also carries data-tab for CSS.
+  const tab = target.closest<HTMLElement>('button[data-tab]')?.dataset.tab as Tab | undefined;
+  if (tab) {
+    setTab(tab);
+    return;
+  }
   const act = target.closest<HTMLElement>('[data-act]');
   const card = target.closest<HTMLElement>('.pass[data-norad]');
   if (act && card) {
@@ -441,6 +692,11 @@ document.addEventListener('click', (e) => {
     if (!pass) return;
     if (act.dataset.act === 'cal') downloadIcs(pass);
     if (act.dataset.act === 'show') select(state.byNorad.get(pass.norad) ?? null, true);
+    return;
+  }
+  const satCardEl = target.closest<HTMLElement>('.sat-card[data-norad]');
+  if (satCardEl) {
+    select(state.byNorad.get(Number(satCardEl.dataset.norad)) ?? null, true);
     return;
   }
   const res = target.closest<HTMLElement>('#results [data-norad]');
@@ -451,10 +707,15 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (target.closest('#info-close')) select(null);
+  if (target.closest('#track')) setFollowing(!state.following);
+  if (target.closest('#share')) share();
   if (!target.closest('.search')) $('#results').hidden = true;
 });
 
-$('#panel .grab').addEventListener('click', () => $('#panel').classList.toggle('collapsed'));
+document.addEventListener('keydown', (e) => {
+  const card = (e.target as HTMLElement).closest?.('.sat-card[data-norad]') as HTMLElement | null;
+  if (card && e.key === 'Enter') select(state.byNorad.get(Number(card.dataset.norad)) ?? null, true);
+});
 
 const q = $<HTMLInputElement>('#q');
 q.addEventListener('input', () => search(q.value));
@@ -470,7 +731,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.activeElement !== q) select(null);
 });
 
-if (!localStorage.getItem('welcomed')) {
+function maybeWelcome() {
+  if (localStorage.getItem('welcomed')) return;
   const w = $('#welcome');
   w.hidden = false;
   const close = () => {
@@ -480,13 +742,13 @@ if (!localStorage.getItem('welcomed')) {
   $('#w-explore').addEventListener('click', close);
   $('#w-pass').addEventListener('click', () => {
     close();
-    $('#panel').classList.remove('collapsed');
-    $('#hero').scrollIntoView({ behavior: 'smooth' });
+    setTab('tonight');
   });
 }
 
 setInterval(() => {
-  $('#clock').textContent = `${fmtTime(new Date())}:${String(new Date().getSeconds()).padStart(2, '0')} ${tzName()}`;
+  const now = new Date();
+  $('#clock').textContent = `${fmtTime(now)}:${String(now.getSeconds()).padStart(2, '0')} ${tzName()}`;
   document.querySelectorAll<HTMLElement>('.pass[data-start]').forEach((card) => {
     const p = state.passes.find((x) => x.norad === Number(card.dataset.norad) && x.start.time.getTime() === Number(card.dataset.start));
     const cd = card.querySelector('[data-cd]');
@@ -495,17 +757,19 @@ setInterval(() => {
   updateInfoLive();
 }, 1000);
 
+// The list is cheap to rebuild from positions the globe already computed.
+setInterval(() => state.sats.length && refreshOverIndia(), 2000);
 // Drop finished passes once a minute.
 setInterval(renderPasses, 60_000);
 
-applyStrings();
+renderCities();
+renderPasses();
 globe.setObserver(state.place.lat, state.place.lon);
 
 async function load() {
   const res = await fetch(`${import.meta.env.BASE_URL}data/catalog.json`);
   const cat: RawCatalog = await res.json();
   state.raw = cat.sats;
-  state.generatedAt = cat.generatedAt;
   state.sats = cat.sats.flatMap((r) => {
     try {
       return [decodeSat(r)];
@@ -519,14 +783,21 @@ async function load() {
   $('#updated').textContent = `${fmtDay(new Date(cat.generatedAt))} ${fmtTime(new Date(cat.generatedAt))}`;
   applyLayers();
   computePasses();
+  $('#boot').classList.add('done');
+
+  // Deep link: #sat=25544 opens that satellite, so a shared link lands on it.
+  const linked = Number(new URLSearchParams(location.hash.slice(1)).get('sat'));
+  const sat = state.byNorad.get(linked);
+  if (sat) select(sat, true);
+  else maybeWelcome();
 }
 
 load().catch((err) => {
   console.error(err);
   $('#count').textContent = '!';
+  $('#boot').classList.add('done');
 });
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
 }
-

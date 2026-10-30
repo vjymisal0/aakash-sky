@@ -104,6 +104,8 @@ const pointFrag = /* glsl */ `
 
 export interface GlobeEvents {
   onSelect(sat: Sat | null): void;
+  /** Fired when the user drags the globe while it was following a satellite. */
+  onFollowEnd(): void;
 }
 
 export class Globe {
@@ -117,6 +119,8 @@ export class Globe {
   private lit!: Float32Array;
   private visibleAttr!: Float32Array;
   private sats: Sat[] = [];
+  private index = new Map<Sat, number>();
+  private following: Sat | null = null;
   private cursor = 0;
   private orbitLine: THREE.Line | null = null;
   private selectedMarker: THREE.Mesh;
@@ -200,6 +204,7 @@ export class Globe {
 
   setSatellites(sats: Sat[]) {
     this.sats = sats;
+    this.index = new Map(sats.map((s, i) => [s, i]));
     const n = sats.length;
     this.positions = new Float32Array(n * 3);
     this.lit = new Float32Array(n).fill(1);
@@ -256,7 +261,7 @@ export class Globe {
     if (!sat) return;
     this.orbitLine = this.buildOrbit(sat, new Date());
     this.scene.add(this.orbitLine);
-    const i = this.sats.indexOf(sat);
+    const i = this.index.get(sat) ?? -1;
     if (fly && i >= 0) {
       const p = new THREE.Vector3().fromArray(this.positions, i * 3);
       const dist = Math.min(Math.max(this.camera.position.length() * 0.85, p.length() + 1.6), 9);
@@ -306,8 +311,35 @@ export class Globe {
 
   /** Current scene position of a satellite (for overlays). */
   positionOf(sat: Sat): THREE.Vector3 | null {
-    const i = this.sats.indexOf(sat);
-    return i < 0 ? null : new THREE.Vector3().fromArray(this.positions, i * 3);
+    const i = this.index.get(sat);
+    return i === undefined ? null : new THREE.Vector3().fromArray(this.positions, i * 3);
+  }
+
+  /**
+   * Geocentric latitude/longitude from the last rendered position. Up to ~0.2° off the
+   * geodetic value and a few frames old, which is fine for coarse grouping of 15k satellites.
+   */
+  approxLatLon(i: number): [lat: number, lon: number] {
+    const x = this.positions[i * 3];
+    const y = this.positions[i * 3 + 1];
+    const z = this.positions[i * 3 + 2];
+    return [THREE.MathUtils.radToDeg(Math.atan2(y, Math.hypot(x, z))), THREE.MathUtils.radToDeg(Math.atan2(-z, x))];
+  }
+
+  isShown(i: number): boolean {
+    return this.visibleAttr[i] === 1;
+  }
+
+  /** Keep the camera above a satellite as it moves; null stops. */
+  follow(sat: Sat | null) {
+    this.following = sat;
+    this.flyTo = null;
+  }
+
+  flyToLatLon(lat: number, lon: number) {
+    const dist = Math.min(this.camera.position.length(), 3.2);
+    this.following = null;
+    this.flyTo = { from: this.camera.position.clone(), to: latLonToScene(lat, lon, dist), t0: performance.now() };
   }
 
   private frame() {
@@ -330,6 +362,14 @@ export class Globe {
         this.selectedMarker.quaternion.copy(this.camera.quaternion);
         const s = this.camera.position.distanceTo(p) * 0.9;
         this.selectedMarker.scale.setScalar(s);
+      }
+    }
+
+    if (this.following) {
+      const p = this.positionOf(this.following);
+      if (p) {
+        const dist = this.camera.position.length();
+        this.camera.position.lerp(p.setLength(dist), 0.12).setLength(dist);
       }
     }
 
@@ -369,6 +409,10 @@ export class Globe {
     el.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY };
       this.flyTo = null;
+      if (this.following) {
+        this.following = null;
+        this.events.onFollowEnd();
+      }
     });
     el.addEventListener('pointerup', (e) => {
       if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
