@@ -302,10 +302,6 @@ select:focus-visible {
   stroke: currentColor;
   stroke-width: 1.6;
 }
-.lang {
-  min-width: 44px;
-  padding: 0 10px;
-}
 
 /* ---------- layout ---------- */
 

@@ -4,7 +4,7 @@ A live 3D satellite tracker for the Indian public. Every dot on the globe is a r
 
 - **Spot it tonight.** Pick your city (or use your location) and get the next naked-eye passes for the next 7 days: when it appears, where to look, how high it climbs and when it fades. One tap adds a pass to your phone's calendar with a 10-minute reminder.
 - **Explore the sky in 3D.** About 15,000 active satellites on a day/night globe, coloured by layer: India (ISRO and Indian-owned), space stations, Starlink, navigation, weather, OneWeb. Tap any dot for its owner, launch date, orbit, live altitude and speed, and whether it is in sunlight.
-- **India first.** Indian satellites are their own layer, with mission types (NavIC navigation, Cartosat imaging, INSAT weather, and so on). There are 33 preset Indian cities, including Sriharikota, and the whole UI is available in Hindi.
+- **India first.** Indian satellites are their own layer, with mission types (NavIC navigation, Cartosat imaging, INSAT weather, and so on). There are 33 preset Indian cities, including Sriharikota.
 - **Free, no login, no backend.** It is a static site. Orbital data is downloaded at build time and the orbit maths runs on your device.
 
 ## Run it locally
@@ -28,7 +28,7 @@ npm run build   # production build in dist/
 | Orbit + sky maths | `src/core/sky.ts` | SGP4 via `satellite.js`. A pass is visible when the satellite is above 10°, the observer's sun is below −6° (civil twilight) and the satellite is sunlit. Coarse 60 s scan, then a 5 s walk through each pass. Dark windows are computed once per location and shared by every satellite. |
 | Pass worker | `src/passes.worker.ts` | Predicts 7 days for all CelesTrak "visual" satellites off the main thread, streaming partial results so the hero card fills in first. |
 | Globe | `src/globe.ts` | Plain three.js in an Earth-fixed frame, with a day/night shader driven by the real sun position. It propagates about 2,500 satellites per frame, so the whole fleet refreshes every few frames, and it dims satellites in Earth's shadow. |
-| UI | `src/main.ts`, `src/style.css`, `src/i18n.ts` | No framework. English and Hindi. Mobile layout uses a bottom sheet. |
+| UI | `src/main.ts`, `src/style.css`, `src/i18n.ts` | No framework. All copy lives in `i18n.ts`. Mobile layout uses a bottom sheet. |
 | Calendar | `src/core/ics.ts` | RFC 5545 export with a display alarm and UTF-8-safe line folding. |
 | Offline | `public/sw.js` | App shell cache-first, orbital data network-first. |
 

@@ -11,7 +11,7 @@ import { toIcs } from './core/ics';
 import { isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
 import { CITIES } from './data/cities';
 import { CATEGORY_COLORS, Globe } from './globe';
-import { getLang, locale, setLang, t, tCategory, tCompass, tMission } from './i18n';
+import { LOCALE, t, tCategory, tMission } from './i18n';
 import type { PassRequest, PassResponse } from './passes.worker';
 
 const CATEGORY_ORDER: Category[] = ['india', 'station', 'starlink', 'gnss', 'weather', 'oneweb', 'other'];
@@ -48,20 +48,20 @@ function loadPlace(): Place {
     // first visit
   }
   const d = CITIES[0];
-  return { name: d.en, cityId: d.id, lat: d.lat, lon: d.lon };
+  return { name: d.name, cityId: d.id, lat: d.lat, lon: d.lon };
 }
 
 function placeName(p: Place) {
   const city = CITIES.find((c) => c.id === p.cityId);
-  if (city) return getLang() === 'hi' ? city.hi : city.en;
+  if (city) return city.name;
   return t('myLocation');
 }
 
 // ---------- formatting ----------
 
-const fmtTime = (d: Date) => new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
-const fmtDay = (d: Date) => new Intl.DateTimeFormat(locale(), { weekday: 'short', day: 'numeric', month: 'short' }).format(d);
-const fmtNum = (n: number, digits = 0) => new Intl.NumberFormat(locale(), { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(n);
+const fmtTime = (d: Date) => new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+const fmtDay = (d: Date) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' }).format(d);
+const fmtNum = (n: number, digits = 0) => new Intl.NumberFormat(LOCALE, { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(n);
 const tzName = () =>
   new Intl.DateTimeFormat('en-IN', { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? '';
 
@@ -74,7 +74,7 @@ function countdown(p: Pass, now = Date.now()) {
   return t('inDays', { d: Math.floor(min / 1440), h: Math.floor((min % 1440) / 60) });
 }
 
-const dir = (pt: PassPoint) => tCompass(compass(pt.azimuth));
+const dir = (pt: PassPoint) => compass(pt.azimuth);
 const durationMin = (p: Pass) => Math.max(1, Math.round((p.end.time.getTime() - p.start.time.getTime()) / 60_000));
 
 // ---------- layout ----------
@@ -96,7 +96,6 @@ function renderShell() {
       <div class="bar-right">
         <span class="pill live"><i></i><span class="pill-label"><span data-t="live"></span> ·</span> <b id="count">—</b></span>
         <span class="clock mono" id="clock"></span>
-        <button class="btn ghost lang" id="lang" type="button"></button>
       </div>
     </header>
     <main class="layout">
@@ -148,7 +147,6 @@ function applyStrings() {
     el.textContent = t(el.dataset.t as Parameters<typeof t>[0]);
   });
   $<HTMLInputElement>('#q').placeholder = t('search');
-  $('#lang').textContent = getLang() === 'hi' ? 'EN' : 'हिं';
   $('#geo').title = t('useMyLocation');
   renderCities();
   renderChips();
@@ -158,11 +156,10 @@ function applyStrings() {
 
 function renderCities() {
   const sel = $<HTMLSelectElement>('#city');
-  const hi = getLang() === 'hi';
   const custom = state.place.cityId ? '' : `<option value="" selected>${esc(t('myLocation'))}</option>`;
   sel.innerHTML =
     custom +
-    CITIES.map((c) => `<option value="${c.id}" ${c.id === state.place.cityId ? 'selected' : ''}>${esc(hi ? c.hi : c.en)}</option>`).join('');
+    CITIES.map((c) => `<option value="${c.id}" ${c.id === state.place.cityId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
 }
 
 function renderChips() {
@@ -387,7 +384,6 @@ function search(q: string) {
 // ---------- wiring ----------
 
 renderShell();
-document.documentElement.lang = getLang();
 
 const globe = new Globe($('#globe'), { onSelect: (s) => select(s) });
 
@@ -419,7 +415,7 @@ $('#chips').addEventListener('click', (e) => {
 
 $('#city').addEventListener('change', (e) => {
   const c = CITIES.find((x) => x.id === (e.target as HTMLSelectElement).value);
-  if (c) setPlace({ name: c.en, cityId: c.id, lat: c.lat, lon: c.lon });
+  if (c) setPlace({ name: c.name, cityId: c.id, lat: c.lat, lon: c.lon });
 });
 
 $('#geo').addEventListener('click', () => {
@@ -434,11 +430,6 @@ $('#geo').addEventListener('click', () => {
     () => (hint.textContent = t('locationDenied')),
     { timeout: 10_000, maximumAge: 3_600_000 },
   );
-});
-
-$('#lang').addEventListener('click', () => {
-  setLang(getLang() === 'hi' ? 'en' : 'hi');
-  applyStrings();
 });
 
 document.addEventListener('click', (e) => {

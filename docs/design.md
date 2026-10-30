@@ -18,7 +18,7 @@ Success means a first-time visitor reaches their next visible pass in under 10 s
 | Globe | three.js directly (no Cesium or globe.gl) | Small bundle. Full control over point rendering and frame budget for 15k moving points. |
 | Visibility | Elevation ≥ 10°, sun ≤ −6°, satellite sunlit (`shadowFraction` < 0.5) | Standard naked-eye criteria. Conservative, so we do not send people out for passes in bright twilight. |
 | Reminders | `.ics` download with a 10-minute alarm | Works on every phone with no backend or stored locations. Web push is deferred to v2. |
-| Language | English + Hindi, chosen from `navigator.language` and switchable | Matches the target audience. |
+| Language | English only | Hindi was built and then removed at the owner's request. All copy stays in `src/i18n.ts`. |
 | Location privacy | Geolocation rounded to 0.01° and stored only in `localStorage` | Pass times do not need more precision. Nothing leaves the device. |
 | Look | Near-black, single saffron accent, Space Grotesk for prose, JetBrains Mono for data | Instrument-like and calm. Every pixel on screen is real data. |
 
