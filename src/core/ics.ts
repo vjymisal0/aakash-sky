@@ -19,7 +19,7 @@ export function escapeText(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
 }
 
-/** RFC 5545 line folding at 75 octets (UTF-8 aware, so Hindi text folds correctly). */
+/** RFC 5545 line folding at 75 octets (UTF-8 aware, so multi-byte characters such as ° are never split). */
 export function fold(line: string): string {
   const enc = new TextEncoder();
   const parts: string[] = [];
