@@ -4,9 +4,9 @@ Date: 2026-10-30
 
 ## Goal
 
-Real-world impact for the Indian general public. Someone opens a link on a mid-range Android phone, picks their city, learns when the space station passes over tonight, steps outside and sees it. Exploring the 3D globe is the hook that makes the link worth sharing.
+Real-world impact for the Indian general public. Someone opens a link on a mid-range Android phone, picks their city, learns when the space station passes over tonight, steps outside and sees it. Seeing India's sky filled with live satellites is the hook that makes the link worth sharing.
 
-Success means a first-time visitor reaches their next visible pass in under 10 seconds with no login. The 3D globe stays smooth on a mid-range phone.
+Success means a first-time visitor reaches their next visible pass in under 10 seconds with no login. The map stays smooth on a mid-range phone.
 
 ## Decisions
 
@@ -15,7 +15,8 @@ Success means a first-time visitor reaches their next visible pass in under 10 s
 | Platform | Mobile-first static web app (PWA) | No install friction. Shareable on WhatsApp. Costs about ₹0 to host. |
 | Data | CelesTrak GP (`active`, OMM CSV) + SATCAT, fetched at build time | Free and authoritative. CelesTrak forbids high-frequency polling, so browsers never call it. |
 | Orbit maths | `satellite.js` SGP4 in the browser | No server. Positions stay live between data refreshes. |
-| Globe | three.js directly (no Cesium or globe.gl) | Small bundle. Full control over point rendering and frame budget for 15k moving points. |
+| Map | MapLibre GL + OpenFreeMap dark style, India-centred, with a globe toggle | v1 used a three.js globe. Users could not find India among 15k dots, so it was replaced with a labelled map, following vimana.live. |
+| Default layers | Starlink and OneWeb hidden | They are ~70% of the fleet and visually drown out Indian and visible satellites. |
 | Visibility | Elevation ≥ 10°, sun ≤ −6°, satellite sunlit (`shadowFraction` < 0.5) | Standard naked-eye criteria. Conservative, so we do not send people out for passes in bright twilight. |
 | Reminders | `.ics` download with a 10-minute alarm | Works on every phone with no backend or stored locations. Web push is deferred to v2. |
 | Language | English only | Hindi was built and then removed at the owner's request. All copy stays in `src/i18n.ts`. |

@@ -12,11 +12,12 @@ import { toIcs } from './core/ics';
 import { crossing, isOverIndia, subPoint, type Crossing } from './core/india';
 import { isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
 import { CITIES } from './data/cities';
-import { CATEGORY_COLORS, Globe } from './globe';
+import { CATEGORY_COLORS, SkyMap } from './skymap';
 import { LOCALE, t, tBadge, tCategory, tMission } from './i18n';
 import type { PassRequest, PassResponse } from './passes.worker';
 
 const CATEGORY_ORDER: Category[] = ['india', 'station', 'starlink', 'gnss', 'weather', 'oneweb', 'other'];
+const DEFAULT_LAYERS = CATEGORY_ORDER.filter((c) => c !== 'starlink' && c !== 'oneweb');
 /** Order of the "Over India" list: what people care about first, the Starlink flood last. */
 const LIST_PRIORITY: Category[] = ['station', 'india', 'weather', 'gnss', 'other', 'oneweb', 'starlink'];
 /** ISS and Tiangong outshine everything else in the catalog. */
@@ -43,7 +44,8 @@ const state = {
   place: loadPlace(),
   passes: [] as Pass[],
   passesDone: false,
-  layers: new Set<Category>(CATEGORY_ORDER),
+  // Starlink and OneWeb are ~70% of the fleet and bury everything else, so they start hidden.
+  layers: new Set<Category>(DEFAULT_LAYERS),
   selected: null as Sat | null,
   following: false,
   overIndia: [] as OverItem[],
@@ -179,13 +181,17 @@ function renderShell() {
         </section>
       </aside>
       <div class="stage">
-        <div id="globe"></div>
+        <div id="map"></div>
         <button type="button" class="overlay-chip" id="india-chip" data-tab="india"><i></i><span id="india-chip-text">—</span></button>
         <div class="chips" id="chips"></div>
-        <button type="button" class="btn ghost near-me" id="near-me">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
-          <span>${esc(t('nearMe'))}</span>
-        </button>
+        <div class="map-tools">
+          <button type="button" class="btn ghost" id="near-me">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+            <span>${esc(t('nearMe'))}</span>
+          </button>
+          <button type="button" class="btn ghost icon-text" id="home" title="${esc(t('backToIndia'))}"><span class="mono">IN</span></button>
+          <button type="button" class="btn ghost icon-text" id="projection" title="${esc(t('toggle3d'))}"><span class="mono">3D</span></button>
+        </div>
         <div class="hover-tip" id="tip" hidden></div>
         <article class="info card" id="info" hidden></article>
         <footer class="attrib">
@@ -250,7 +256,7 @@ function renderChips() {
     `<button type="button" class="chip ${all ? 'on' : ''}" data-cat="all">${esc(t('all'))}</button>` +
     CATEGORY_ORDER.filter((c) => counts.get(c))
       .map(
-        (c) => `<button type="button" class="chip ${state.layers.has(c) && !all ? 'on' : ''}" data-cat="${c}">
+        (c) => `<button type="button" class="chip ${state.layers.has(c) ? 'on' : ''}" data-cat="${c}">
           <i style="background:${CATEGORY_COLORS[c]}"></i>${esc(tCategory(c))}<span class="mono">${fmtNum(counts.get(c)!)}</span></button>`,
       )
       .join('');
@@ -263,8 +269,8 @@ function refreshOverIndia() {
   const found: OverItem[] = [];
   const seen = new Set<number>();
   for (let i = 0; i < state.sats.length; i++) {
-    if (!globe.isShown(i)) continue;
-    const [lat, lon] = globe.approxLatLon(i);
+    if (!sky.isShown(i)) continue;
+    const [lat, lon] = sky.approxLatLon(i);
     if (!isOverIndia(lat, lon)) continue;
     const sat = state.sats[i];
     let c = crossings.get(sat.norad);
@@ -438,7 +444,7 @@ function downloadIcs(p: Pass) {
 function select(sat: Sat | null, fly = false) {
   state.selected = sat;
   setFollowing(false);
-  globe.select(sat, fly);
+  sky.select(sat, fly);
   history.replaceState(null, '', sat ? `#sat=${sat.norad}` : location.pathname + location.search);
   renderInfo();
   document.querySelectorAll('.sat-card.on').forEach((el) => el.classList.remove('on'));
@@ -448,7 +454,7 @@ function select(sat: Sat | null, fly = false) {
 
 function setFollowing(on: boolean) {
   state.following = on;
-  globe.follow(on ? state.selected : null);
+  sky.follow(on ? state.selected : null);
   const b = document.getElementById('track');
   if (b) {
     b.classList.toggle('active', on);
@@ -608,13 +614,12 @@ function search(q: string) {
 renderShell();
 setTab(state.tab);
 
-const globe = new Globe($('#globe'), {
+const sky = new SkyMap($('#map'), {
   onSelect: (s) => select(s),
   onFollowEnd: () => setFollowing(false),
   onHover: (sat, x, y) => {
     const tip = $('#tip');
     tip.hidden = !sat;
-    $('#globe canvas').style.cursor = sat ? 'pointer' : '';
     if (!sat) return;
     const r = $('.stage').getBoundingClientRect();
     tip.style.transform = `translate(${x - r.left + 14}px, ${y - r.top + 14}px)`;
@@ -627,13 +632,13 @@ const globe = new Globe($('#globe'), {
 function setPlace(p: Place) {
   state.place = p;
   localStorage.setItem('place', JSON.stringify(p));
-  globe.setObserver(p.lat, p.lon);
+  sky.setObserver(p.lat, p.lon);
   renderCities();
   if (state.raw.length) computePasses();
 }
 
 function applyLayers() {
-  globe.setFilter((s) => state.layers.has(s.category));
+  sky.setFilter((s) => state.layers.has(s.category));
   renderChips();
   if (state.sats.length) refreshOverIndia();
 }
@@ -662,12 +667,12 @@ $('#chips').addEventListener('click', (e) => {
   const cat = (e.target as HTMLElement).closest<HTMLElement>('[data-cat]')?.dataset.cat;
   if (!cat) return;
   const all = state.layers.size === CATEGORY_ORDER.length;
-  if (cat === 'all') state.layers = new Set(CATEGORY_ORDER);
-  else if (all) state.layers = new Set([cat as Category]);
+  // "All" flips between everything and the uncluttered default; other chips toggle one layer.
+  if (cat === 'all') state.layers = all ? new Set(DEFAULT_LAYERS) : new Set(CATEGORY_ORDER);
   else {
     if (state.layers.has(cat as Category)) state.layers.delete(cat as Category);
     else state.layers.add(cat as Category);
-    if (!state.layers.size) state.layers = new Set(CATEGORY_ORDER);
+    if (!state.layers.size) state.layers = new Set(DEFAULT_LAYERS);
   }
   applyLayers();
 });
@@ -678,9 +683,16 @@ $('#city').addEventListener('change', (e) => {
 });
 
 $('#geo').addEventListener('click', () => locate());
+$('#home').addEventListener('click', () => sky.home());
+$('#projection').addEventListener('click', (e) => {
+  const p = sky.toggleProjection();
+  const b = e.currentTarget as HTMLElement;
+  b.classList.toggle('on', p === 'globe');
+  b.querySelector('span')!.textContent = p === 'globe' ? '2D' : '3D';
+});
 $('#near-me').addEventListener('click', () => {
-  globe.flyToLatLon(state.place.lat, state.place.lon);
-  locate((lat, lon) => globe.flyToLatLon(lat, lon));
+  sky.flyToLatLon(state.place.lat, state.place.lon);
+  locate((lat, lon) => sky.flyToLatLon(lat, lon));
 });
 
 const listFilter = $<HTMLInputElement>('#list-filter');
@@ -776,9 +788,9 @@ setInterval(renderPasses, 60_000);
 
 renderCities();
 renderPasses();
-globe.setObserver(state.place.lat, state.place.lon);
+sky.setObserver(state.place.lat, state.place.lon);
 // Dev-only handle for profiling from the browser console.
-if (import.meta.env.DEV) Object.assign(window, { __globe: globe });
+if (import.meta.env.DEV) Object.assign(window, { __sky: sky });
 
 async function load() {
   const res = await fetch(`${import.meta.env.BASE_URL}data/catalog.json`);
@@ -792,18 +804,22 @@ async function load() {
     }
   });
   state.byNorad = new Map(state.sats.map((s) => [s.norad, s]));
-  globe.setSatellites(state.sats);
+  sky.setSatellites(state.sats);
   $('#count').textContent = fmtNum(state.sats.length);
   $('#updated').textContent = `${fmtDay(new Date(cat.generatedAt))} ${fmtTime(new Date(cat.generatedAt))}`;
   applyLayers();
   computePasses();
   $('#boot').classList.add('done');
 
-  // Deep link: #sat=25544 opens that satellite, so a shared link lands on it.
-  const linked = Number(new URLSearchParams(location.hash.slice(1)).get('sat'));
-  const sat = state.byNorad.get(linked);
-  if (sat) select(sat, true);
-  else maybeWelcome();
+  if (!openLinkedSat()) maybeWelcome();
+  addEventListener('hashchange', openLinkedSat);
+}
+
+/** Deep link: #sat=25544 opens that satellite, so a shared link lands on it. */
+function openLinkedSat() {
+  const sat = state.byNorad.get(Number(new URLSearchParams(location.hash.slice(1)).get('sat')));
+  if (sat && sat !== state.selected) select(sat, true);
+  return !!sat;
 }
 
 load().catch((err) => {
