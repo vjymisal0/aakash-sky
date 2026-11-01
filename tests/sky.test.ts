@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { json2satrec } from 'satellite.js';
-import { darkWindows, findVisiblePasses, sunElevation, type Observer } from '../src/core/sky';
+import { darkWindows, dedupePasses, findVisiblePasses, sunElevation, type Observer } from '../src/core/sky';
 
 // ISS elements from CelesTrak, epoch 2026-10-29. Reference values below were computed
 // independently with Skyfield 1.55 + DE421 (find_events at 10°, is_sunlit, apparent sun altitude).
@@ -90,5 +90,30 @@ describe('findVisiblePasses visibility', () => {
     const p = passes.find((x) => secondsApart(x.max.time, '2026-10-31T20:16:13Z') < 30);
     expect(p).toBeDefined();
     expect(Math.abs(p!.max.elevation - 51.2)).toBeLessThan(0.5);
+  });
+});
+
+describe('dedupePasses', () => {
+  const pt = (iso: string, az: number, el: number) => ({ time: new Date(iso), azimuth: az, elevation: el });
+  const pass = (norad: number, offsetSec = 0, az = 300) => {
+    const at = (iso: string) => new Date(Date.parse(iso) + offsetSec * 1000).toISOString();
+    return {
+      norad,
+      start: pt(at('2026-11-02T00:07:06Z'), az, 10),
+      max: pt(at('2026-11-02T00:09:58Z'), az + 40, 25),
+      end: pt(at('2026-11-02T00:12:48Z'), az + 80, 10),
+    };
+  };
+
+  it('keeps one pass for objects flying together, preferring the given satellite', () => {
+    // POISK and Progress are docked to the ISS: same pass to the second.
+    const out = dedupePasses([pass(36086, 1), pass(25544), pass(64001, 2)], (n) => n === 25544);
+    expect(out.map((p) => p.norad)).toEqual([25544]);
+  });
+
+  it('keeps passes of different satellites at different times or directions', () => {
+    const out = dedupePasses([pass(1), pass(2, 120), pass(3, 0, 120)], () => false);
+    // Sorted by start: 3 starts with 1 but in another part of the sky.
+    expect(out.map((p) => p.norad)).toEqual([1, 3, 2]);
   });
 });
