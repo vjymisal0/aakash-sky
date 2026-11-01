@@ -33,6 +33,9 @@ Success means a first-time visitor reaches their next visible pass in under 10 s
 - Brightness magnitudes, debris, and decayed objects.
 - Deep-space missions (Chandrayaan, Aditya-L1, Mars Orbiter). They have no Earth-orbit elements in GP data, so they cannot be shown.
 
-## Hosting note
+## Hosting
 
-The repository is private, so GitHub Pages is not available on the free plan. Cloudflare Pages or Netlify can build private repos for free. Use `npm run build`, publish `dist/`, and schedule a rebuild every 2–6 hours to refresh orbits.
+- **App:** Netlify (https://aakash-sky.netlify.app), configured in `netlify.toml`. A production deploy costs 15 of the free plan's 300 monthly credits, so the site is rebuilt only when the code changes.
+- **Orbit data:** `.github/workflows/data.yml` fetches CelesTrak every 3 hours and force-pushes `catalog.json` to the single-commit `data` branch. The app reads it from `raw.githubusercontent.com` and falls back to the copy bundled at build time. Refreshing data costs no Netlify credits.
+- **Manual deploy:** `npx netlify-cli deploy --prod --dir dist` after `npm run build`.
+- GitHub disables scheduled workflows after 60 days without repository activity. If the "updated" time in the footer turns red, re-enable the workflow in the Actions tab.
