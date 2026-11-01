@@ -667,6 +667,14 @@ select {
 .attrib a {
   pointer-events: auto;
 }
+/* Set when the orbital data is older than the refresh job should ever allow. */
+.attrib .stale {
+  color: #ff6b5e;
+  pointer-events: auto;
+}
+.attrib .stale::after {
+  content: ' ⚠';
+}
 
 /* ---------- welcome ---------- */
 

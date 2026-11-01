@@ -47,8 +47,17 @@ export const CATEGORIES = ['station', 'india', 'gnss', 'weather', 'starlink', 'o
  * Pick one display category per satellite. Order matters: a NavIC satellite is
  * both Indian and GNSS, and we want India to win for this audience.
  */
+/**
+ * CelesTrak's "stations" group also lists cubesats released from the ISS, so a station is
+ * that group *and* a station, station module or visiting spacecraft by name.
+ */
+const STATION_NAME = /^(ISS|CSS) \(|^(POISK|PROGRESS|SOYUZ|CREW DRAGON|DRAGON|CYGNUS|STARLINER|HTV|TIANZHOU|SHENZHOU|SZ-\d+)\b/;
+
+/** The ISS and Tiangong: always bright enough to see, even if the visual group fails to download. */
+export const MAIN_STATIONS = new Set([25544, 48274]);
+
 export function categorize({ name, norad, owner, groups }) {
-  if (groups.stations.has(norad)) return 'station';
+  if (groups.stations.has(norad) && STATION_NAME.test(name)) return 'station';
   if (owner === 'IND') return 'india';
   if (groups.gnss.has(norad)) return 'gnss';
   if (groups.weather.has(norad)) return 'weather';
@@ -76,7 +85,8 @@ export function buildCatalog({ activeCsv, satcatCsv, groupCsvs, generatedAt }) {
     const meta = satcat.get(norad);
     const owner = meta?.OWNER ?? '';
     const name = r.OBJECT_NAME;
-    const flags = groups.visual.has(norad) || groups.stations.has(norad) ? FLAG_VISUAL : 0;
+    // Not the whole stations group: modules and docked craft would repeat every ISS pass.
+    const flags = groups.visual.has(norad) || MAIN_STATIONS.has(norad) ? FLAG_VISUAL : 0;
     sats.push([
       name,
       norad,

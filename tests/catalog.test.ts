@@ -37,6 +37,19 @@ describe('categorize', () => {
     expect(categorize({ name: 'ONEWEB-0012', norad: 2, owner: 'UK', groups: empty })).toBe('oneweb');
     expect(categorize({ name: 'SOMETHING', norad: 3, owner: 'US', groups: empty })).toBe('other');
   });
+  // CelesTrak's "stations" group also lists cubesats released from the ISS.
+  it('treats only stations, their modules and visiting spacecraft as stations', () => {
+    const ids = [25544, 49044, 48274, 64001, 64002, 64003, 64004];
+    const groups = { ...empty, stations: new Set(ids) };
+    const cat = (name: string, norad: number, owner = 'US') => categorize({ name, norad, owner, groups });
+    expect(cat('ISS (ZARYA)', 25544, 'ISS')).toBe('station');
+    expect(cat('ISS (NAUKA)', 49044, 'CIS')).toBe('station');
+    expect(cat('CSS (TIANHE)', 48274, 'PRC')).toBe('station');
+    expect(cat('PROGRESS-MS 34', 64001, 'CIS')).toBe('station');
+    expect(cat('CREW DRAGON 13', 64002)).toBe('station');
+    expect(cat('KNACKSAT-2', 64003, 'THAI')).toBe('other');
+    expect(cat('HMU-SAT2', 64004, 'IND')).toBe('india');
+  });
 });
 
 describe('buildCatalog', () => {
@@ -65,6 +78,20 @@ describe('buildCatalog', () => {
     expect(carto[14]).toBe('IND');
     expect(carto[15]).toBe('2019-11-27');
     expect(carto[16]).toBe(0);
+  });
+
+  it('marks stations visible only through the visual group or as a main station', () => {
+    const cube = 'KNACKSAT-2,2026-001X,2026-10-29T10:00:00.000000,15.5,.001,51.6,10,20,30,0,U,64003,999,100,.1E-4,.1E-5,0';
+    const nauka = 'ISS (NAUKA),2021-066A,2026-10-29T13:31:42.192192,15.49100842,.00070497,51.6333,355.1294,324.3141,35.7375,0,U,49044,999,59258,.10764701E-3,.5507E-4,0';
+    const c = buildCatalog({
+      activeCsv: [GP_HEADER, ISS, nauka, cube].join('\n'),
+      satcatCsv: SATCAT_HEADER,
+      groupCsvs: { visual: GP_HEADER, stations: [GP_HEADER, ISS, nauka, cube].join('\n'), gnss: GP_HEADER, weather: GP_HEADER },
+      generatedAt: '2026-10-30T00:00:00.000Z',
+    });
+    const flags = Object.fromEntries((c.sats as RawSat[]).map((r) => [r[0], r[16]]));
+    // ISS stays visible even if the visual group download failed; its attached module and the cubesat do not.
+    expect(flags).toEqual({ 'ISS (ZARYA)': 1, 'ISS (NAUKA)': 0, 'KNACKSAT-2': 0 });
   });
 
   it('produces records the client can decode and propagate, including 6-digit IDs', () => {

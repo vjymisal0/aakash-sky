@@ -84,6 +84,7 @@ const en = {
   hoursAgo: '{n} h old',
   dataFrom: 'Orbital data',
   updated: 'updated',
+  staleData: 'Orbit data is {n} h old, so positions and pass times may be off.',
   notForSafety: 'Approximate · not for safety-critical use',
   calendarTitle: '{name} visible: {from} → {to}, up to {el}°',
   calendarBody: 'Look {from} at {start}. It climbs to {el}° in the {max} and fades {to}. From {place}. Computed by Aakash from CelesTrak data.',

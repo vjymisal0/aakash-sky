@@ -1,6 +1,7 @@
-// Offline support: app shell and textures cache-first, orbital data network-first
-// (stale orbits are still useful for a few days when the network drops).
-const CACHE = 'aakash-v1';
+// Offline support. Pages and orbital data are network-first, so a new deploy and fresh orbits
+// reach people on their next visit; the cache answers only when the network is down.
+// Hashed build assets never change, so they are cache-first.
+const CACHE = 'aakash-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {
@@ -9,32 +10,25 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+function store(req, res) {
+  if (res.ok) {
+    const copy = res.clone();
+    caches.open(CACHE).then((c) => c.put(req, copy));
+  }
+  return res;
+}
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  if (url.pathname.endsWith('/data/catalog.json')) {
+  const immutable = url.pathname.includes('/assets/');
+  if (!immutable) {
     e.respondWith(
       fetch(e.request)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-          return res;
-        })
-        .catch(() => caches.match(e.request)),
+        .then((res) => store(e.request, res))
+        .catch(() => caches.match(e.request).then((hit) => hit || Response.error())),
     );
     return;
   }
-  e.respondWith(
-    caches.match(e.request).then(
-      (hit) =>
-        hit ||
-        fetch(e.request).then((res) => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copy));
-          }
-          return res;
-        }),
-    ),
-  );
+  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => store(e.request, res))));
 });
