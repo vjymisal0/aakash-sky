@@ -20,7 +20,9 @@ function store(req, res) {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // The live orbit snapshot is the one cross-origin file worth keeping offline.
+  const snapshot = url.origin === 'https://raw.githubusercontent.com' && url.pathname.startsWith('/vjymisal0/aakash-sky/data/');
+  if (e.request.method !== 'GET' || (url.origin !== location.origin && !snapshot)) return;
   const immutable = url.pathname.includes('/assets/');
   if (!immutable) {
     e.respondWith(

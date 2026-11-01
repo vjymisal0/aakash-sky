@@ -804,10 +804,33 @@ sky.setObserver(state.place.lat, state.place.lon);
 // Dev-only handle for profiling from the browser console.
 if (import.meta.env.DEV) Object.assign(window, { __sky: sky });
 
-async function load() {
-  const res = await fetch(`${import.meta.env.BASE_URL}data/catalog.json`);
-  if (!res.ok) throw new Error(`catalog.json: HTTP ${res.status}`);
+/**
+ * Orbital data published every 3 h by .github/workflows/data.yml, so the site stays current
+ * without a rebuild. The copy bundled at build time is the fallback.
+ */
+const SNAPSHOT_URL = import.meta.env.DEV ? null : 'https://raw.githubusercontent.com/vjymisal0/aakash-sky/data/catalog.json';
+
+async function fetchCatalog(url: string, timeoutMs: number): Promise<RawCatalog> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const cat: RawCatalog = await res.json();
+  if (!Array.isArray(cat.sats) || !cat.generatedAt) throw new Error(`${url}: unexpected format`);
+  return cat;
+}
+
+async function loadCatalog(): Promise<RawCatalog> {
+  const bundled = `${import.meta.env.BASE_URL}data/catalog.json`;
+  if (!SNAPSHOT_URL) return fetchCatalog(bundled, 60_000);
+  try {
+    return await fetchCatalog(SNAPSHOT_URL, 15_000);
+  } catch (err) {
+    console.warn('Live snapshot unavailable, using bundled data', err);
+    return fetchCatalog(bundled, 60_000);
+  }
+}
+
+async function load() {
+  const cat = await loadCatalog();
   state.raw = cat.sats;
   state.sats = cat.sats.flatMap((r) => {
     try {
