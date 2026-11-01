@@ -178,3 +178,27 @@ function pushPass(passes: Pass[], norad: number, seg: PassPoint[]) {
   const max = seg.reduce((a, b) => (b.elevation > a.elevation ? b : a));
   passes.push({ norad, start: seg[0], max, end: seg[seg.length - 1] });
 }
+
+/**
+ * Merge passes of objects that fly together, such as modules and spacecraft docked to the ISS:
+ * they cross the sky at the same moment along the same path, so they are one sight, not several.
+ * `prefer` picks which satellite names the merged pass. Input and output are sorted by start.
+ */
+export function dedupePasses(passes: Pass[], prefer: (norad: number) => boolean, toleranceSec = 30): Pass[] {
+  const sorted = [...passes].sort((a, b) => a.start.time.getTime() - b.start.time.getTime());
+  const out: Pass[] = [];
+  const tol = toleranceSec * 1000;
+  const angle = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
+  const same = (a: Pass, b: Pass) =>
+    Math.abs(a.max.time.getTime() - b.max.time.getTime()) <= tol &&
+    Math.abs(a.max.elevation - b.max.elevation) <= 2 &&
+    angle(a.max.azimuth, b.max.azimuth) <= 5;
+  for (const p of sorted) {
+    let i = out.length - 1;
+    while (i >= 0 && p.start.time.getTime() - out[i].start.time.getTime() <= tol && !same(out[i], p)) i--;
+    const dup = i >= 0 && p.start.time.getTime() - out[i].start.time.getTime() <= tol;
+    if (!dup) out.push(p);
+    else if (prefer(p.norad) && !prefer(out[i].norad)) out[i] = p;
+  }
+  return out;
+}

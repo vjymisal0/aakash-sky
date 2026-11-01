@@ -1,0 +1,39 @@
+name: Refresh orbital data
+
+# CelesTrak updates GP data about every 2 hours and blocks clients that poll faster,
+# so every 3 hours is both fresh enough and polite. The app reads the result from the
+# `data` branch on raw.githubusercontent.com, so a refresh needs no site rebuild.
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      # fetch-data.mjs uses only Node built-ins, so no npm install is needed.
+      - run: node scripts/fetch-data.mjs --force --no-fallback
+      - name: Publish to the data branch
+        run: |
+          node -e "const c=require('./public/data/catalog.json'); if (c.sats.length < 5000) throw new Error('only ' + c.sats.length + ' satellites')"
+          mkdir -p /tmp/data && cp public/data/catalog.json /tmp/data/
+          cd /tmp/data
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog.json
+          git commit -q -m "data: $(node -p "require('./catalog.json').generatedAt")"
+          # One commit only: the branch holds the latest snapshot, not a growing history.
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data

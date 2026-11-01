@@ -10,7 +10,7 @@ import { decodeSat, periodMinutes, type Category, type RawCatalog, type RawSat, 
 import { compass, isUnnamed, mission, orbitClass, OWNERS } from './core/describe';
 import { toIcs } from './core/ics';
 import { crossing, isOverIndia, subPoint, type Crossing } from './core/india';
-import { isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
+import { dedupePasses, isSunlit, satEci, type Observer, type Pass, type PassPoint } from './core/sky';
 import { CITIES } from './data/cities';
 import { CATEGORY_COLORS, SkyMap } from './skymap';
 import { LOCALE, t, tBadge, tCategory, tMission } from './i18n';
@@ -23,6 +23,8 @@ const LIST_PRIORITY: Category[] = ['station', 'india', 'weather', 'gnss', 'other
 /** ISS and Tiangong outshine everything else in the catalog. */
 const VERY_BRIGHT = new Set([25544, 48274]);
 const PASS_DAYS = 7;
+/** CelesTrak refreshes every ~2 h; data older than this means the refresh job has stopped. */
+const STALE_HOURS = 12;
 
 type View = 'india' | 'tonight';
 type Tab = 'globe' | View;
@@ -416,7 +418,8 @@ function computePasses() {
   const visual = state.raw.filter((r) => r[16] & 1).sort((a, b) => Number(VERY_BRIGHT.has(b[1])) - Number(VERY_BRIGHT.has(a[1])));
   worker.onmessage = (e: MessageEvent<PassResponse>) => {
     if (e.data.id !== id) return;
-    state.passes = e.data.passes;
+    // Modules and spacecraft docked to a station repeat its pass; show it once, under the station's name.
+    state.passes = dedupePasses(e.data.passes, (n) => VERY_BRIGHT.has(n));
     state.passesDone = e.data.done;
     renderPasses();
     if (state.selected) renderInfo();
@@ -577,12 +580,12 @@ async function share() {
 }
 
 let toastTimer = 0;
-function toast(msg: string) {
+function toast(msg: string, ms = 1800) {
   const el = $('#toast');
   el.textContent = msg;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (el.hidden = true), 1800);
+  toastTimer = window.setTimeout(() => (el.hidden = true), ms);
 }
 
 // ---------- search ----------
@@ -649,6 +652,10 @@ function applyLayers() {
 
 function locate(after?: (lat: number, lon: number) => void) {
   const hint = $('#geo-hint');
+  if (!navigator.geolocation) {
+    hint.textContent = t('locationDenied');
+    return;
+  }
   hint.textContent = t('locating');
   navigator.geolocation.getCurrentPosition(
     (pos) => {
@@ -797,9 +804,33 @@ sky.setObserver(state.place.lat, state.place.lon);
 // Dev-only handle for profiling from the browser console.
 if (import.meta.env.DEV) Object.assign(window, { __sky: sky });
 
-async function load() {
-  const res = await fetch(`${import.meta.env.BASE_URL}data/catalog.json`);
+/**
+ * Orbital data published every 3 h by .github/workflows/data.yml, so the site stays current
+ * without a rebuild. The copy bundled at build time is the fallback.
+ */
+const SNAPSHOT_URL = import.meta.env.DEV ? null : 'https://raw.githubusercontent.com/vjymisal0/aakash-sky/data/catalog.json';
+
+async function fetchCatalog(url: string, timeoutMs: number): Promise<RawCatalog> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const cat: RawCatalog = await res.json();
+  if (!Array.isArray(cat.sats) || !cat.generatedAt) throw new Error(`${url}: unexpected format`);
+  return cat;
+}
+
+async function loadCatalog(): Promise<RawCatalog> {
+  const bundled = `${import.meta.env.BASE_URL}data/catalog.json`;
+  if (!SNAPSHOT_URL) return fetchCatalog(bundled, 60_000);
+  try {
+    return await fetchCatalog(SNAPSHOT_URL, 15_000);
+  } catch (err) {
+    console.warn('Live snapshot unavailable, using bundled data', err);
+    return fetchCatalog(bundled, 60_000);
+  }
+}
+
+async function load() {
+  const cat = await loadCatalog();
   state.raw = cat.sats;
   state.sats = cat.sats.flatMap((r) => {
     try {
@@ -811,7 +842,15 @@ async function load() {
   state.byNorad = new Map(state.sats.map((s) => [s.norad, s]));
   sky.setSatellites(state.sats);
   $('#count').textContent = fmtNum(state.sats.length);
-  $('#updated').textContent = `${fmtDay(new Date(cat.generatedAt))} ${fmtTime(new Date(cat.generatedAt))}`;
+  const updated = $('#updated');
+  updated.textContent = `${fmtDay(new Date(cat.generatedAt))} ${fmtTime(new Date(cat.generatedAt))}`;
+  const ageHours = (Date.now() - Date.parse(cat.generatedAt)) / 3_600_000;
+  if (ageHours > STALE_HOURS) {
+    const msg = t('staleData', { n: fmtNum(ageHours) });
+    updated.classList.add('stale');
+    updated.title = msg;
+    toast(msg, 6000);
+  }
   applyLayers();
   computePasses();
   $('#boot').classList.add('done');

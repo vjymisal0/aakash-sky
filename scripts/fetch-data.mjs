@@ -10,9 +10,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const out = resolve(root, 'public/data/catalog.json');
 const GP = 'https://celestrak.org/NORAD/elements/gp.php';
 const MAX_AGE_MS = 2 * 60 * 60 * 1000;
+// Snapshot published every 3 h by .github/workflows/data.yml. Used when CelesTrak refuses
+// this machine (it blocks some cloud build IPs), so a build never ships without data.
+const SNAPSHOT = 'https://raw.githubusercontent.com/vjymisal0/aakash-sky/data/catalog.json';
 
 async function get(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': 'aakash-sky (+https://github.com/vjymisal0)' } });
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'aakash-sky (+https://github.com/vjymisal0/aakash-sky)' },
+    signal: AbortSignal.timeout(90_000),
+  });
   const text = await res.text();
   // 403 with this message means we already hold the latest data; retrying risks an IP ban.
   if (res.status === 403) throw new Error(`403 for ${url}: ${text.trim().replace(/\s+/g, ' ').slice(0, 160)}`);
@@ -56,13 +62,34 @@ async function main() {
     await writeFile(out, JSON.stringify(catalog));
     console.log(`Wrote ${catalog.sats.length} satellites to ${out}`);
   } catch (err) {
-    // Keep serving the previous catalog if CelesTrak is unreachable.
-    if (existing) {
-      const prev = JSON.parse(await readFile(out, 'utf8'));
-      console.warn(`Download failed (${err.message}); keeping catalog from ${prev.generatedAt}`);
+    console.warn(`CelesTrak download failed (${err.message})`);
+    const prev = existing ? JSON.parse(await readFile(out, 'utf8')) : null;
+    const snap = process.argv.includes('--no-fallback') ? null : await snapshot();
+    if (snap && (!prev || snap.generatedAt > prev.generatedAt)) {
+      await mkdir(dirname(out), { recursive: true });
+      await writeFile(out, JSON.stringify(snap));
+      console.log(`Using published snapshot from ${snap.generatedAt} (${snap.sats.length} satellites)`);
+      return;
+    }
+    // Keep serving the previous catalog if nothing newer is reachable.
+    if (prev) {
+      console.warn(`Keeping catalog from ${prev.generatedAt}`);
       return;
     }
     throw err;
+  }
+}
+
+async function snapshot() {
+  try {
+    const res = await fetch(SNAPSHOT, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const cat = await res.json();
+    if (!Array.isArray(cat.sats) || !cat.generatedAt) throw new Error('unexpected format');
+    return cat;
+  } catch (err) {
+    console.warn(`Snapshot download failed (${err.message})`);
+    return null;
   }
 }
 
